@@ -1045,7 +1045,7 @@ window.__ModuleLoader__.load({
         (() => {
           const warns = []
           const dm = Number(pickPerDay) || 0
-          const pr = Number(perRound) || 0
+          const pr = Number(pickPerRound) || 0
           const rd = Number(runsPerDay) || 0
           if (dm > 24) warns.push(`每天 ${dm} 条 ⇒ 平均每 ${Math.max(1, Math.round(1440 / dm))} 分钟发一条评论。B站 对高频评论 + 固定 @ 同一人有明确的反垃圾识别，小号很可能当天被封。`)
           if (pr > 5) warns.push(`每轮 ${pr} 条偏多 —— 单轮越久，转写和判断成本越高。`)
@@ -1095,9 +1095,9 @@ window.__ModuleLoader__.load({
             desc: '一轮里最多挑中几个视频（0 = 只跑不挑）',
           }, h('input', {
             'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 0, max: 20,
-            value: perRound ?? '',
-            onChange: (e) => setPerRound(e.target.value),
-            onBlur: () => { const n = Math.max(0, Math.min(Number(perRound) || 0, 20)); setPerRound(String(n)); patch({ perRoundMax: n }, '每轮最多挑几条') },
+            value: pickPerRound ?? '',
+            onChange: (e) => setPickPerRound(e.target.value),
+            onBlur: () => { const n = Math.max(0, Math.min(Number(pickPerRound) || 0, 20)); setPickPerRound(String(n)); patch({ perRoundMax: n }, '每轮最多挑几条') },
           })),
           h(Row, {
             label: '每天最多挑几条',

@@ -253,5 +253,5 @@ node tools/_check-1016.mjs                          # 106 条静态断言
 
 ## 许可
 
-MIT。衍生自 dsh-bili-scroll，完整版权声明见 [LICENSE](./LICENSE)。
+MIT。许可全文见 [LICENSE](./LICENSE)；衍生关系与第三方代码的版权声明见 [NOTICE](./NOTICE.md)。
 内置的 B站 MCP 来自 [bilibili-mcp](https://github.com/AGI_Ananas/bilibili-mcp)（MIT）。

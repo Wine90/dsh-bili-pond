@@ -1479,11 +1479,16 @@ export function apply(ctx, config) {
 
   /**
    * ⭐ 「值班用哪个模型」下拉的数据源 —— **不写死任何线路**，直接问 DSH 当前注册了什么。
-   *    跟 Web 界面右下角那个模型选择器读的是同一个服务（ctx.llm.listProviders / listModels）。
+   *
+   *    ⚠️⚠️ 这里必须用**两个**方法取并集（2026-10-20 用户实测反馈：装了 workbuddy 却看不到）：
+   *      · `listProviders()`            —— 只列出**适配器已注册**的线路（真正激活的）
+   *      · `listConfigurableProviders()` —— 列出**所有声明过的**线路，含尚未激活（dormant）的
+   *    只问前者的话：插件装了、但适配器还没注册（比如还没配置/还没激活）时，
+   *    那条线路**完全不会出现**；而 DSH 右下角的模型选择器读的是后者 ⇒ 两边不一致 ✗
+   *    ⇒ 并集：先放已激活的，再补上"声明了但没激活"的（active: false，界面上标注"未启用"）。
+   *
    *    ⚠️ llm 是**可选**依赖：拿不到（老版本 / 没挂 llm）就回空列表，设置页照样能用，
    *       只是没有下拉 —— 绝不能让整条插件因为这个不激活。
-   *    ⚠️ 这里读出的是**当前进程（桌面 profile）**的线路；值班那一轮跑在另一个 profile 里，
-   *       所以 runDuty 前还要用 checkDutyModel() 去那个 profile 里再核一遍。
    */
   const modelsHere = async () => {
     const llm = ctx.get?.('llm')
@@ -1491,18 +1496,40 @@ export function apply(ctx, config) {
       return { ok: false, providers: [], error: '这个 DSH 没有提供 llm 服务，无法列模型' }
     }
     try {
-      const providers = llm.listProviders() || []
-      const out = []
-      for (const p of providers) {
+      const active = llm.listProviders() || []
+      let declared = []
+      try {
+        if (typeof llm.listConfigurableProviders === 'function') declared = llm.listConfigurableProviders() || []
+      } catch { /* 老版本没有这个方法：只列已激活的 */ }
+
+      const byId = new Map()
+      for (const p of active) {
         const id = String(p?.id || '')
         if (!id) continue
+        byId.set(id, { id, name: String(p?.name || id), active: true, error: '' })
+      }
+      for (const c of declared) {
+        const id = String(c?.provider || '')
+        if (!id) continue
+        const cur = byId.get(id)
+        if (cur) continue                        // 已激活的优先，别被 dormant 条目覆盖
+        byId.set(id, {
+          id,
+          name: String(c?.displayName || id),
+          active: false,                         // 声明了，但适配器没注册 ⇒ 现在还不能用
+          error: String(c?.error || ''),
+        })
+      }
+
+      const out = []
+      for (const p of byId.values()) {
         let models = []
         try {
-          const list = await llm.listModels(id)
+          const list = await llm.listModels(p.id)
           models = (list || []).map((m) => ({ id: String(m?.id || ''), name: String(m?.name || m?.id || '') }))
             .filter((m) => m.id)
-        } catch { /* 这条线路列不出来就留空，不影响别的 */ }
-        out.push({ id, name: String(p?.name || id), models })
+        } catch { /* 没激活的线路列不出模型是正常的；别的线路出错也不该连坐 */ }
+        out.push({ ...p, models })
       }
       return { ok: true, providers: out }
     } catch (e) {

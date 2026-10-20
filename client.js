@@ -1450,11 +1450,21 @@ window.__ModuleLoader__.load({
               const curModels = cur ? (cur.models || []) : []
               const provOpts = [h('option', { value: '', key: '__default' }, '跟随 headless 默认（推荐）')]
               for (const x of list) {
+                /* ⭐ 三种状态要分清（2026-10-20）：
+                 *    · 已激活（active）          —— 正常可选
+                 *    · 声明了但没激活（active:false）—— 线路插件装了但适配器没注册，选它跑不起来，
+                 *                                    所以置灰并说明原因，别让用户以为插件没识别到
+                 *    · 值班 profile 里没有（usable === false）—— 那是另一个 profile 的问题，置灰 */
+                const notActive = x.active === false
+                const notInProfile = x.usable === false
+                const suffix = notActive
+                  ? '（未启用：线路插件没激活）'
+                  : (notInProfile ? '（值班 profile 里没装）' : '')
                 provOpts.push(h('option', {
                   key: x.id,
                   value: x.id,
-                  disabled: x.usable === false,
-                }, x.name + (x.usable === false ? '（该 profile 未安装）' : '')))
+                  disabled: notActive || notInProfile,
+                }, x.name + suffix))
               }
               const modelOpts = [h('option', { value: '', key: '__lineDefault' }, '（使用线路默认）')]
               for (const m of curModels) {
@@ -1465,7 +1475,7 @@ window.__ModuleLoader__.load({
                   label: '运行模型线路',
                   desc: (models && !models.profileKnown)
                     ? '未能读取运行 profile 的线路，可用性未知'
-                    : '列表来自 DSH 当前注册的线路；运行 profile 中未安装的会标注',
+                    : '列表来自 DSH 声明的全部线路（含还没激活的）；不可用的会标注原因',
                 }, h('select', {
                   'data-bd-select': '', 'data-bd-w-md': '', value: dutyProv ?? '',
                   onChange: (e) => {
@@ -1475,6 +1485,13 @@ window.__ModuleLoader__.load({
                     patch({ dutyProvider: v, dutyModel: '' }, '运行模型线路')
                   },
                 }, provOpts)),
+                /* ⭐ 如果有线路声明了却没激活，直接说清楚为什么 —— 否则用户只会看到
+                 *    "我明明装了 workbuddy，这里却没有"（2026-10-20 实测反馈） */
+                (models && Array.isArray(models.providers) && models.providers.some((x) => x.active === false))
+                  ? h('div', { 'data-bd-row-desc': '' },
+                      '有线路装了但没激活（下面标着「未启用」）：去「设置 → 模型/线路」把它启用，或检查它的配置；'
+                      + '激活后这里就能直接选。')
+                  : null,
                 (dutyProv && curModels.length > 0)
                   ? h(Row, {
                       label: '具体模型',

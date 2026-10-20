@@ -246,6 +246,14 @@ ok(cli.includes('const commentCap = Math.min(5, pickCap)'), '界面没按每轮�
 ok(!/const num = \(k, lo, hi, dflt\) => \{ if \(k in p\) p\[k\] = Math\.max\(lo, Math\.min\(Number\(p\[k\]\) \|\| dflt, hi\)\) \}/.test(idx), 'num() 又用 || 兜底了 —— 0（只跑不挑）会被改回默认值')
 ok(idx.includes('Number.isFinite(n) ? n : dflt'), 'num() 没改成只对 NaN 兜底')
 
+// ㉗ 模型线路列表必须同时读"已注册"和"已声明"两个来源
+//    2026-10-20 用户实测：装了 workbuddy 但下拉里没有 —— listProviders() 只列已注册适配器的，
+//    插件装了还没激活（dormant）就完全看不到；右下角的模型选择器读的是声明目录，所以两边不一致
+ok(idx.includes('listConfigurableProviders'), '模型列表只问了 listProviders（未激活的线路会整个消失）')
+ok(/for \(const c of declared\)/.test(idx), '没有把"声明了但没激活"的线路并进来')
+ok(idx.includes('active: false'), '未激活的线路没有标记（界面无法解释为什么选不了）')
+ok(cli.includes('未启用：线路插件没激活'), '界面没解释未激活线路的原因')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

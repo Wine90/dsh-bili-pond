@@ -78,8 +78,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "prepublishOnly": "node --import ./tools/register.mjs selfcheck.mjs && node tools/_check-1016.mjs",
-    "check": "node --import ./tools/register.mjs selfcheck.mjs && node tools/_check-1016.mjs"
+    "check": "node --import ./tools/register.mjs selfcheck.mjs && node tools/_check-1016.mjs && node tools/test-migrate.mjs && node tools/test-comment-cap.mjs",
+    "prepublishOnly": "npm run check"
   },
   "author": {
     "name": "YOYOLnFu",

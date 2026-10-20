@@ -1,0 +1,79 @@
+{
+  "name": "dsh-bili-pond",
+  "version": "1.0.0",
+  "description": "B站鱼塘 —— 每天派鱼下去 B站 捞几条值得看的上来，写完日报 @ 你。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "bili",
+    "radar",
+    "daily-digest"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOYOLnFu/dsh-bili-pond.git"
+  },
+  "homepage": "https://github.com/YOYOLnFu/dsh-bili-pond#readme",
+  "bugs": {
+    "url": "https://github.com/YOYOLnFu/dsh-bili-pond/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "prompts",
+    "vendor",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "selfcheck.mjs"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "author": "YOYOLnFu"
+}

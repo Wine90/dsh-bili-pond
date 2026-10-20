@@ -1821,14 +1821,27 @@ export function apply(ctx, config) {
           appendAsr('建环境失败 —— 先点上面的「装依赖」，把 uv 或 Python 准备好\n')
           log('转写：建环境失败'); return
         }
-        appendAsr('装 faster-whisper + yt-dlp（走国内镜像）…\n')
+        appendAsr('装 faster-whisper + yt-dlp（依次尝试多个镜像）…\n')
         let code = 1
         // ⚠️ av 必须钉在 17 以下：faster-whisper 1.2.1 会调 av.open(metadata_errors=…)，
         //    而 av 17+ 不再接受这个参数 ⇒ 装了最新的 av 反而转不了（2026-10-14 在主人机器上实证）
         const AV_PIN = process.env.BILI_DUTY_AV_PIN || 'av>=12,<17'
-        if (uvCmd) code = await spawnTo(uvCmd, ['pip', 'install', '--python', py, '-i', mirror, 'faster-whisper', 'yt-dlp', AV_PIN], { sink: appendAsr })
-        if (code !== 0) code = await spawnTo(py, ['-m', 'pip', 'install', '-i', mirror, 'faster-whisper', 'yt-dlp', AV_PIN], { sink: appendAsr })
-        if (code !== 0) { appendAsr('装包失败 —— 看上面的报错\n'); log('转写：装包失败'); return }
+        // ⭐ 2026-10-20：跟主依赖安装一样，一个镜像失败就换下一个。
+        //    实测清华镜像会对部分 IP 回 403，而 pip 把它写成「这个包不存在」，非常误导。
+        const mirrors = [...new Set([
+          mirror,
+          'https://mirrors.ustc.edu.cn/pypi/simple',
+          'https://mirrors.aliyun.com/pypi/simple',
+          'https://pypi.org/simple',
+        ])]
+        for (let i = 0; i < mirrors.length && code !== 0; i++) {
+          const m = mirrors[i]
+          appendAsr((i === 0 ? '镜像：' : '换个镜像再试：') + m + '\n')
+          if (uvCmd) code = await spawnTo(uvCmd, ['pip', 'install', '--python', py, '-i', m, 'faster-whisper', 'yt-dlp', AV_PIN], { sink: appendAsr })
+          if (code !== 0) code = await spawnTo(py, ['-m', 'pip', 'install', '-i', m, 'faster-whisper', 'yt-dlp', AV_PIN], { sink: appendAsr })
+          if (code === 0) appendAsr('镜像可用：' + m + '\n')
+        }
+        if (code !== 0) { appendAsr('所有镜像都失败了 —— 看上面的报错\n'); log('转写：装包失败（所有镜像）'); return }
         // ⭐ 顺手把模型也下好（不然第一次跑那一轮会卡在下载上 ✗）；模型走 HuggingFace 国内镜像
         const model = String(cfg.asrModel || 'small')
         // 模型缓存必须放进插件家：默认的 ~/.cache 在本机拒绝写入（2026-10-14 实测 WinError 5）

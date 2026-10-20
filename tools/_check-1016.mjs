@@ -187,6 +187,12 @@ ok(/dmMode: z\.string\(\)\.default\('off'\)/.test(idx), 'dmMode 默认不是 off
 ok(idx.includes('commentOn'), '没有 commentOn 这个统一判据（工具闸和提示词会各说各话）')
 ok(duty.includes('500') || idx.includes('500'), '私信没写 500 字上限（超了接口直接拒）')
 
+// ⑰ 「有 N 项未能同步」只能报真失败（local-override 是「面板说了算」的账，不是失败账）
+ok(!idx.includes('notSynced: Object.keys(readOverride())'), 'notSynced 又拿 local-override 当失败列表了（会常驻误报）')
+ok(idx.includes('notSynced: Object.keys(readSyncFailed())'), 'notSynced 没改成读 sync-failed.json')
+ok(idx.includes("syncFailedFile = join(stateDir, 'sync-failed.json')"), '没建 sync-failed.json 这本账')
+ok(/if \(host\.ok\) markSyncFailed/.test(idx), '写成功时没清 sync-failed（旧的失败记录会一直挂着）')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

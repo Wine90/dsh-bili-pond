@@ -194,6 +194,28 @@ export function apply(ctx, config) {
       writeFileSync(overrideFile, JSON.stringify(cur, null, 2), 'utf8')
     } catch (e) { log('记 local-override 失败：' + (e && e.message ? e.message : e)) }
   }
+  /**
+   * ⭐ 2026-10-20：两本账必须分开记，否则「设置页保存过什么」会被当成「什么没写进去」
+   *
+   *   · local-override.json = 从**插件面板**保存过的键（local-first 的依据）。
+   *     无条件记 ⇒ 有 10 个键是常态，不是故障。它只喂 loadCfg 的优先级。
+   *   · sync-failed.json    = `ctx.settings.update()` **真的抛错**的键。
+   *     只有这本账才能拿去提示用户「没能同步」。
+   *
+   *   上一版把 local-override 的键直接当失败列表交给界面 ⇒ 只要你动过一次设置，
+   *   那 10 个键就会常驻报「有 10 项未能同步」（而其实全都存下来了）。
+   */
+  const syncFailedFile = join(stateDir, 'sync-failed.json')
+  const readSyncFailed = () => {
+    try { const j = readJson(syncFailedFile, {}); return j && typeof j === 'object' ? j : {} } catch { return {} }
+  }
+  const markSyncFailed = (keys, on) => {
+    try {
+      const cur = readSyncFailed()
+      for (const k of keys) { if (on) cur[k] = Date.now(); else delete cur[k] }
+      writeFileSync(syncFailedFile, JSON.stringify(cur, null, 2), 'utf8')
+    } catch (e) { log('记 sync-failed 失败：' + (e && e.message ? e.message : e)) }
+  }
   const logFile = join(stateDir, 'duty.log')
   const outDir = join(stateDir, 'out')
   mkdirSync(outDir, { recursive: true })
@@ -399,6 +421,10 @@ export function apply(ctx, config) {
   }
 
   /**
+   * ⭐ 落配置的**唯一入口**：插件自己那份 config.json + DSH 原生设置页那份，钳完范围一起写。
+   *    （2026-10-17 复查修：`saveCfg` + `await saveCfgHost` 这对义务原来在三个调用点各抄一遍 ——
+   *      漏掉任何一处，正好就是「设置页改了没反应」那个 bug 本身 ⇒ 收成一个函数。）
+   *
    * ⭐ 关于「写 DSH 设置后回读校验」（2026-10-20 分家时去掉）
    *
    *   原实现在 update() 成功后调 settingsDesc(true) 回读 user 层，比对不上就判失败、
@@ -411,32 +437,8 @@ export function apply(ctx, config) {
    *     · 于是紧接着回读拿到的是旧值 ⇒ 判定「没写进去」⇒ 10 个键全被记成 override。
    *
    *   危害：那条提示常驻不下，还会把**真正的**同步失败淹掉（override 里全是假阳性）。
-   *   现在：写成功就信成功；只在 update() 真抛错时才算失败。
-   *   真被压回去也有另一道保险 —— loadCfg 是「本地优先」，即使宿主层没生效，
-   *   插件仍按自己的 config.json 跑，行为是对的。
-   */
-  /**
-   * ⭐ 落配置的**唯一入口**：插件自己那份 config.json + DSH 原生设置页那份，钳完范围一起写。
-   *    （2026-10-17 复查修：`saveCfg` + `await saveCfgHost` 这对义务原来在三个调用点各抄一遍 ——
-   *      漏掉任何一处，正好就是「设置页改了没反应」那个 bug 本身 ⇒ 收成一个函数。）
-   */
-  /**
-   * ⭐ 关于「写 DSH 设置后回读校验」（2026-10-20 分家时去掉）
-   *
-   *   原实现在 update() 成功后调 settingsDesc(true) 回读 user 层，比对不上就判失败、
-   *   记进 local-override.json，界面上显示"有 N 项未能同步到 DSH 原生设置"。
-   *
-   *   实测这是**误报**：
-   *     · ctx.settings.update() 写的是 profile patch 文件（值确实落盘了 —— 文件里查得到）；
-   *     · 但 describe() 读的是 loader **内存里**的 entry.options.config，
-   *       内存要等下一次 config reload 才刷新；
-   *     · 于是紧接着回读拿到的是旧值 ⇒ 判定"没写进去" ⇒ 10 个键全被记成 override。
-   *
-   *   危害：那条提示常驻不下，而且会把**真正的**同步失败淹掉（override 里全是假阳性）。
-   *
-   *   现在：写成功就信成功；只在 update() 真的抛错时才算失败。
-   *   真被压回去的情况有另一道保险 —— loadCfg 本身是「本地优先」（persistCfg 里 markOverride），
-   *   所以即使宿主层没生效，插件也按自己的 config.json 跑，行为是对的。
+   *   现在：写成功就信成功；只在 update() 真抛错时才算失败 —— 而且只有这种失败
+   *   才记进 sync-failed.json、才会出现在界面上（见上面两本账的注释）。
    */
   const persistCfg = async (patch) => {
     const clean = clampPatch(patch)
@@ -450,7 +452,11 @@ export function apply(ctx, config) {
     //   ⇒ 不再指望 DSH 那边：只要是从**插件面板**保存的键，读配置时一律以插件自己那份为准 ✓
     //   ⚠️ 代价：同名的项若在 DSH 原生设置页改，以插件面板为准（我们的设置页才是"正式的家"）。
     markOverride(Object.keys(clean), true)
-    if (!host.ok) log('⚠️ 这几项没能同步到 DSH 原生设置，改为以插件自己的值为准：' + Object.keys(clean).join(', ') + '（' + host.error + '）')
+    if (host.ok) markSyncFailed(Object.keys(clean), false)
+    else {
+      markSyncFailed(Object.keys(clean), true)
+      log('⚠️ 这几项没能同步到 DSH 原生设置，改为以插件自己的值为准：' + Object.keys(clean).join(', ') + '（' + host.error + '）')
+    }
     return { clean, host }
   }
 
@@ -1712,7 +1718,7 @@ export function apply(ctx, config) {
       version: myVersion(),
       // 2026-10-18：这几项"本地存了、但没能同步到 DSH 原生设置" ⇒ 设置页要告诉用户
       // （DSH 0.2.1 某些启动方式会拒写：profile reload requires the root Include entry）
-      notSynced: Object.keys(readOverride()),
+      notSynced: Object.keys(readSyncFailed()),
       installFailed: !installing && !venvReadyNow() && (() => { try { return readFileSync(installLogFile, 'utf8').length > 0 } catch { return false } })(),
       installing,
       // ── 2026-10-20 自动运行 / 配额 / 熔断 的可观测值 ──

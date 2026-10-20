@@ -732,9 +732,12 @@ export function apply(ctx, config) {
   tool({
     name: 'bili_run',
     description: '**立刻跑一轮**（不等窗口）：起一个 headless 会话，把 duty.md 交给它去刷、写报告。'
-      + '适合"我现在就想看一份"的场合。',
+      + '适合"我现在就想看一份"的场合。⚠️ 上一轮还没跑完时不会重复开（返回 busy）。',
     parameters: {},
-    async execute() { const r = await runDutySafe('manual'); return { ok: true, ...r } },
+    async execute() {
+      const r = await runDutySafe('manual')
+      return r.started ? { ok: true, ...r } : { ok: false, ...r }
+    },
   })
 
   tool({
@@ -1169,6 +1172,18 @@ export function apply(ctx, config) {
 
   const runDuty = (why = 'window') => {
    try {
+    /* ⭐ 同一时间只允许一轮（2026-10-20）：按钮灰掉只是防手滑，
+     *    真正的闸必须在这里 —— 网页、bili_run 工具、定时器三条路都走这个函数。
+     *    上一轮没结束时再开一轮 = 两个 headless 进程同时烧模型额度、同时写同一份报告。 */
+    if (dutyRun) {
+      const el = Math.round((Date.now() - dutyRun.startedAt) / 1000)
+      log(`这一轮没跑：上一轮还在跑（已 ${el} 秒，来源 ${dutyRun.why}）`)
+      return {
+        started: false, busy: true, why,
+        elapsedSec: el, runningWhy: dutyRun.why,
+        error: `上一轮还在跑（已 ${el} 秒），等它结束再开`,
+      }
+    }
     refreshCfg()          // ⭐ 设置页刚改过的值要立刻生效（config 是就地改的，快照会过期）
     const dsh = resolveDsh()
     const overlay = ensureOverlay()

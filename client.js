@@ -879,9 +879,9 @@ window.__ModuleLoader__.load({
         setBusy('run')
         try {
           const r = await jpost('/run', {})
-          say(r?.started
-            ? '已在后台运行一轮，报告将写入 out/ 目录'
-            : '未启动，详见 duty.log', r?.started ? 'good' : 'warn')
+          if (r?.started) say('已在后台运行一轮，报告将写入 out/ 目录', 'good')
+          else if (r?.busy) say(String(r.error || '上一轮还在跑，等它结束再开'), 'warn')
+          else say('未启动，详见 duty.log', 'warn')
         } catch (e) { say(String(e?.message ?? e), 'warn') }
         finally { setBusy('') }
       }
@@ -1058,10 +1058,19 @@ window.__ModuleLoader__.load({
         })() : null,
 
         /* ══ ② 工具栏 ═════════════════════════════════════════════════ */
+        /* ⭐ 跑着的时候按钮变灰（2026-10-20）：以前只灰"点了请求"那一两秒，
+         *    之后又能点第二次 ⇒ 会重复开 headless 进程、重复烧模型额度。
+         *    现在改成看 status.running（服务端那一轮的进程还活着就一直是 true）。 */
         h('div', { 'data-bd-toolbar': '' },
           h('button', {
-            'data-bd-btn': '', 'data-primary': '', disabled: busy === 'run', onClick: onRun,
-          }, busy === 'run' ? '启动中…' : '立即运行一轮'),
+            'data-bd-btn': '', 'data-primary': '',
+            disabled: busy === 'run' || Boolean(st.running),
+            onClick: onRun,
+          }, busy === 'run'
+            ? '启动中…'
+            : (st.running
+              ? `运行中…${st.runElapsedSec ? ' ' + Math.floor(st.runElapsedSec / 60) + ':' + String(st.runElapsedSec % 60).padStart(2, '0') : ''}`
+              : '立即运行一轮')),
           h('button', {
             'data-bd-btn': '', disabled: busy === 'report', onClick: onShowReport,
           }, report !== null ? '收起报告' : '查看今日报告'),

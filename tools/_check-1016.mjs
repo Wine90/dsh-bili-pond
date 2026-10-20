@@ -216,6 +216,13 @@ ok(cli.includes('const dmActive = Boolean(dmOn && Number(dmUid) > 0)'), '前端�
 ok(!cli.includes("cfg.dmMode !== 'only'"), '前端还在用旧的 dmMode 三档判断')
 ok(cli.includes('只发私信') && cli.includes('评论 + 私信') && cli.includes('只发公开评论'), '「本轮会做」的四种结果文案不全')
 
+// ㉑ 同一时间只能有一轮：宿主端必须挡住并发，前端按钮也要跟着灰
+//    2026-10-20 实测：按钮只灰"发请求"那一两秒 ⇒ 跑起来后又可点 ⇒ 能开出第二个 headless 进程
+ok(idx.includes('if (dutyRun) {'), 'runDuty 里没有"上一轮还在跑就别再开"的闸')
+ok(idx.includes('busy: true'), '并发被挡住时没告诉调用方 busy（前端/工具会以为失败了）')
+ok(cli.includes("disabled: busy === 'run' || Boolean(st.running)"), '「立即运行一轮」按钮没跟着 running 变灰')
+ok(idx.includes('不会重复开（返回 busy）'), 'bili_run 工具没声明"不会重复开"')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

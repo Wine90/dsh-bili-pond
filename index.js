@@ -489,6 +489,39 @@ export function apply(ctx, config) {
   // ⭐ 值班章程单独记账（跟 mcp_server.py 不一样：用户改过就得留着 —— 见 state.mjs 的 ensureCharter）
   ensureCharter(pluginDir, stateDir, log)
 
+  /* ⭐ 人设模板（2026-10-20）：用户不知道工作区里的 AGENTS.md 该写什么格式，
+   *    这份骨架就是"照着填就行"的答案。只在用户点按钮且文件不存在时才写。 */
+  const AGENTS_TEMPLATE = `# 我是谁（人设）
+
+> 这份文件会被**整份读进**「刷 B站」那一轮的提示词。写得越具体，挑出来的内容越像你会看的。
+> 格式无所谓（普通 markdown），下面每一节都可以改、删、加、调换顺序。
+
+## 我是谁
+
+（例：我在做 B站/工具类内容，平时主要看工程实现、踩坑复盘这一类。）
+
+## 我关心什么
+
+- 主题 A（例：AI 工具、插件开发、本地部署）
+- 主题 B（例：后端架构、性能优化）
+
+## 我不关心什么
+
+- 纯娱乐、标题党、蹭热度
+- 只念 PPT / 复读文档、没有自己内容的
+- 保姆级入门教程
+
+## 判断值得看的标准
+
+- 有实操、有源码仓库、有可复现数据的，优先
+- 讲清「踩了什么坑、为什么这么设计」的复盘，优先
+- 观点类要能自圆其说，不要只喊口号
+
+## 说话口吻
+
+（例：别用感叹号，别用「家人们」这类词，直接给结论。）
+`
+
   /* ─────────────── MCP（内部起那个 Python MCP） ─────────────── */
 
   let mcp = null
@@ -1130,6 +1163,10 @@ export function apply(ctx, config) {
     } catch (e) { log(`补占位报告失败：${e?.message ?? e}`) }
   }
 
+  /* ⭐ 本轮运行状态（2026-10-20）：设置页要能实时看到"跑到哪了"
+   *   只记开始时间 + 触发原因；日志尾部从 duty.log 现读，不用把输出全攒在内存里。 */
+  let dutyRun = null            // { startedAt: ms, why: 'manual' | 'auto' | … }
+
   const runDuty = (why = 'window') => {
    try {
     refreshCfg()          // ⭐ 设置页刚改过的值要立刻生效（config 是就地改的，快照会过期）
@@ -1137,8 +1174,7 @@ export function apply(ctx, config) {
     const overlay = ensureOverlay()
     const args = [...dsh.args, '--profile', cfg.headlessProfile || 'headless']
     if (overlay) args.push('--patch', overlay)
-    args.push(promptFor())
-    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
+    args.push(promptFor())    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
     // ⭐ 工作目录 = **插件家**：那一轮**被沙箱关着**，只写得了自己工作目录里的东西 ✗
     //    （2026-10-14 教训：为了让它读工作区里的 AGENTS.md 把 cwd 改成工作区 ⇒
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
@@ -1165,7 +1201,9 @@ export function apply(ctx, config) {
     }
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
+    dutyRun = { startedAt: Date.now(), why }
     child.on('exit', (code) => {
+      dutyRun = null
       log(`B站鱼塘结束（${why}，code=${code}）`)
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
       rotateLogIfBig()            // ⭐ 日志别无声地长（三天 797KB ⇒ 一年约 100MB）
@@ -1182,9 +1220,10 @@ export function apply(ctx, config) {
       const verifyTimer = setTimeout(() => { Promise.resolve(runVerify('round')).catch((e) => log('复核异常：' + (e?.message ?? e))) }, 90_000)
       verifyTimer.unref?.()   // 别为了一次复核把宿主进程的退出拖住 90 秒
     })
-    child.on('error', (e) => log(`B站鱼塘起不来：${e?.message ?? e}`))
+    child.on('error', (e) => { dutyRun = null; log(`B站鱼塘起不来：${e?.message ?? e}`) })
     return { started: true, why, profile: cfg.headlessProfile, cwd, log: logFile }
    } catch (e) {
+    dutyRun = null
     log(`B站鱼塘开跑失败（${why}）：${e?.stack ?? e}`)
     return { started: false, why, error: String(e?.message ?? e) }
    }
@@ -1758,6 +1797,11 @@ export function apply(ctx, config) {
       roundsToday: roundsToday(),
       lastRunAt: st.lastRunAt || null,
       lastWhy: st.lastWhy || null,
+      // ⭐ 实时进度（2026-10-20）：这一轮在不在跑、跑了多久 —— 设置页据此决定要不要轮询日志
+      running: Boolean(dutyRun),
+      runStartedAt: dutyRun ? new Date(dutyRun.startedAt).toISOString() : null,
+      runElapsedSec: dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0,
+      runWhy: dutyRun ? dutyRun.why : null,
       // ── 本地转写那一套的状态（设置页要显示进度）──
       asrReady: asrReadyNow(),
       // 模型下没下（免得界面写"就绪"、其实还得现下）
@@ -1770,6 +1814,12 @@ export function apply(ctx, config) {
       installTail: (() => { try { return readFileSync(installLogFile, 'utf8').slice(-1400) } catch { return '' } })(),
       report: join(outDir, `${today}.md`),
       log: logFile,
+      // ⭐ 人设是否真的读得到（设置页要能回答"我的人设生效了吗"）
+      workspace: String(cfg.workspace || '').trim(),
+      agentsFound: (() => {
+        const ws = String(cfg.workspace || '').trim()
+        return Boolean(ws && existsSync(join(ws, 'AGENTS.md')))
+      })(),
     }
   }
 
@@ -1777,6 +1827,50 @@ export function apply(ctx, config) {
     refreshCfg()
     const path = url.pathname
     if (req.method === 'GET' && path === '/api/bili-pond/status') return sendJson(res, 200, status())
+
+    /* ⭐ 「本轮进度」（2026-10-20）：设置页在跑的时候轮询这个，日志尾部 + 派生阶段。
+     *    只读 duty.log 的尾部，不在内存里攒输出；日志被别的进程占着也不抛（try/catch）。 */
+    if (req.method === 'GET' && path === '/api/bili-pond/runlog') {
+      const n = Math.max(5, Math.min(Number(url.searchParams.get('n')) || 30, 200))
+      let lines = []
+      try {
+        const raw = readFileSync(logFile, 'utf8')
+        lines = raw.split('\n').filter((l) => l.trim()).slice(-n)
+          .map((l) => l.replace(/\u001b\[[0-9;]*m/g, '').trim().slice(0, 300))
+      } catch { lines = [] }
+      const tailTxt = lines.slice(-40).join('\n')
+      const stage = /bili_send_message|私信/.test(tailTxt) ? '发私信'
+        : /bili_reply|发布评论|发评论/.test(tailTxt) ? '发评论'
+          : /报告|digest\/|out\//.test(tailTxt) ? '写报告'
+            : /转写|whisper|asr/i.test(tailTxt) ? '转写'
+              : /bili_subtitle|字幕/.test(tailTxt) ? '读字幕'
+                : /bili_search|搜索/.test(tailTxt) ? '检索'
+                  : ''
+      return sendJson(res, 200, {
+        ok: true,
+        running: Boolean(dutyRun),
+        startedAt: dutyRun ? new Date(dutyRun.startedAt).toISOString() : null,
+        elapsedSec: dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0,
+        why: dutyRun ? dutyRun.why : null,
+        pickedToday: countPickedToday(),
+        stage,
+        lines,
+      })
+    }
+
+    /* ⭐ 「建一份 AGENTS.md 模板」：写人设不知道该写什么格式 ⇒ 给一份能直接改的骨架（不覆盖已有文件） */
+    if (req.method === 'POST' && path === '/api/bili-pond/agents-template') {
+      const ws = String(cfg.workspace || '').trim()
+      if (!ws) return sendJson(res, 200, { ok: false, error: '先填「工作区路径」，再建模板' })
+      const f = join(ws, 'AGENTS.md')
+      if (existsSync(f)) return sendJson(res, 200, { ok: false, exists: true, path: f, error: '工作区里已经有 AGENTS.md 了（不会覆盖）' })
+      try {
+        mkdirSync(ws, { recursive: true })
+        writeFileSync(f, AGENTS_TEMPLATE, 'utf8')
+        log(`已写入 AGENTS.md 模板：${f}`)
+        return sendJson(res, 200, { ok: true, path: f })
+      } catch (e) { return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) }) }
+    }
 
     // ⭐ 「@ 谁」：前端填 UID，后端解析出昵称写进 mentionName
     //    （B站 评论只认昵称文本，所以最终还得有昵称；但让用户记 UID 比记昵称可靠）

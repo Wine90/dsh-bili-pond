@@ -649,6 +649,7 @@ window.__ModuleLoader__.load({
       const [rl, setRl] = React.useState(null)
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
       const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
+      const [runLog, setRunLog] = React.useState(null)     // 本轮进度（日志尾部 + 阶段）
       // ⚠️ 输入框必须绑"本地草稿"：页面每 5 秒轮询 /status，服务端那份会把 config 盖掉
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
       const [perDay, setPerDay] = React.useState(null)
@@ -734,6 +735,22 @@ window.__ModuleLoader__.load({
         if (cfg && preferSub === null) setPreferSub(cfg.preferSubtitle !== false)
         if (cfg && probeMax === null) setProbeMax(String(cfg.subtitleProbeMax ?? 3))
       }, [cfg])
+
+      /* ⭐ 本轮进度轮询（2026-10-20）：跑着的时候每 2 秒拉一次日志尾部，跑完再拉一次收尾。
+       *    只读日志尾部，不攒内存；st.running 一变就重建定时器。 */
+      const runningNow = Boolean(st?.running)
+      React.useEffect(() => {
+        let alive = true
+        let timer = null
+        const pull = async () => {
+          try { const r = await jget('/runlog?n=40'); if (alive && r && r.ok) setRunLog(r) } catch { /* 网络抖一下就跳过 */ }
+        }
+        if (runningNow) {
+          pull()
+          timer = setInterval(pull, 2000)
+        } else pull()
+        return () => { alive = false; if (timer) clearInterval(timer) }
+      }, [runningNow])
 
       const win = { ...DEFAULT_WINDOWS, ...(st?.windows || {}) }
 
@@ -935,6 +952,19 @@ window.__ModuleLoader__.load({
         await patch({ keywords: list, workspace: String(ws || '').trim() }, '检索关键词与工作区')
       }
 
+      /* ⭐ 「建模板」：不知道 AGENTS.md 该写什么格式 ⇒ 让插件在工作区里铺一份能直接改的骨架 */
+      const onAgentsTemplate = async () => {
+        const dir = String(ws ?? '').trim()
+        if (!dir) { say('先在上面填「工作区路径」，再点「建模板」', 'warn'); return }
+        setBusy('agents')
+        try {
+          const r = await jpost('/agents-template', { dir })
+          if (r && r.ok) say('已生成 ' + r.path + ' —— 照着里面每一节改就行', 'good')
+          else if (r && r.exists) say('这个目录里已经有 AGENTS.md 了，没覆盖：' + r.path, 'warn')
+          else say('生成失败：' + ((r && r.error) || '未知原因'), 'warn')
+        } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
+      }
+
       /* ── 加载态：给骨架，别只丢一句"读设置中…" ── */
       if (!cfg) {
         return h('div', { 'data-bd-page': '' },
@@ -996,6 +1026,26 @@ window.__ModuleLoader__.load({
             tone: st.venvReady ? (st.loggedIn ? 'ok' : 'warn') : (st.installing ? 'warn' : 'err'),
           }),
           h(Metric, { label: '运行状态', value: planTxt, tone: planTone })),
+
+        /* ══ ①.5 本轮进度（跑的时候实时刷，跑完留最后一份）══════════════ */
+        (st.running || runLog) ? (() => {
+          const L = runLog || {}
+          const lines = Array.isArray(L.lines) ? L.lines : []
+          const sec = st.running ? (L.elapsedSec || st.runElapsedSec || 0) : 0
+          const mm = Math.floor(sec / 60); const ss = String(sec % 60).padStart(2, '0')
+          return h(Card, {
+            title: '本轮进度',
+            desc: st.running
+              ? `跑着（${st.runWhy === 'manual' ? '手动' : st.runWhy || '自动'}）· 已用时 ${mm}:${ss}${L.stage ? ' · 当前：' + L.stage : ''}`
+              : (lines.length ? '上一轮已结束（下面是它的日志尾部）' : ''),
+          },
+            st.running ? h('div', { 'data-bd-row-desc': '' }, '日志每 2 秒刷新一次，跑完会自动停。') : null,
+            h('div', { 'data-bd-row-desc': '' },
+              `今日已挑 ${st.pickedToday ?? 0} / ${cfg.perDayMax || '不限'} 条`),
+            lines.length
+              ? h('div', { 'data-bd-pre': '' }, lines.slice(-20).join('\n'))
+              : h('div', { 'data-bd-row-desc': '' }, '（还没有日志：这一轮刚开始，或者日志被清了）'))
+        })() : null,
 
         /* ══ ② 工具栏 ═════════════════════════════════════════════════ */
         h('div', { 'data-bd-toolbar': '' },
@@ -1300,20 +1350,29 @@ window.__ModuleLoader__.load({
         h(Card, { title: '检索与上下文', desc: '决定检索范围与采用的设定来源' },
           h(StackRow, {
             label: '检索关键词',
-            desc: '每行一个。留空时使用内置关键词组',
+            desc: '每行一个。留空时用内置的这几组：DeepSeek Harness、DSH 插件、dsh 教程、meow-memory、DeepSeek Harness 桌面端',
           }, h('textarea', {
             'data-bd-textarea': '', rows: 4,
-            placeholder: '每行一个关键词',
+            placeholder: '每行一个关键词（留空 = 用内置那 5 组）',
             value: kws ?? '', onChange: (e) => setKws(e.target.value),
           })),
           h(StackRow, {
             label: '工作区路径',
-            desc: '填入包含 AGENTS.md 的目录，运行时会读取该设定。留空则不读取设定，以中性口吻输出',
-          }, h('input', {
-            'data-bd-input': '', 'data-bd-w-full': '', value: ws ?? '',
-            placeholder: '例如 C:\\Users\\你\\my-workspace',
-            onChange: (e) => setWs(e.target.value),
-          })),
+            desc: st.workspace
+              ? (st.agentsFound
+                ? `已读到 ${st.workspace}\\AGENTS.md（这一轮会用它的设定）`
+                : `${st.workspace} 里没有 AGENTS.md —— 会按中性口吻输出，点下面「建模板」就能生成一份`)
+              : '填一个含 AGENTS.md 的目录，运行时读它的设定；留空 = 不读设定、中性口吻。不知道怎么写？填好路径后点「建模板」',
+          }, h('div', { 'data-bd-inline': '' },
+            h('input', {
+              'data-bd-input': '', 'data-bd-w-full': '', value: ws ?? '',
+              placeholder: '例如 C:\\Users\\你\\my-workspace',
+              onChange: (e) => setWs(e.target.value),
+              onBlur: () => { patch({ workspace: String(ws ?? '').trim() }, '工作区路径') },
+            }),
+            h('button', {
+              'data-bd-btn': '', disabled: busy === 'agents', onClick: onAgentsTemplate,
+            }, busy === 'agents' ? '生成中…' : '建模板'))),
           h('div', { 'data-bd-btns': '' },
             h('button', { 'data-bd-btn': '', 'data-primary': '', disabled: Boolean(busy) || saving, onClick: onSaveText },
               saving ? '保存中…' : '保存'),

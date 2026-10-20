@@ -650,6 +650,8 @@ window.__ModuleLoader__.load({
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
       const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
       const [runLog, setRunLog] = React.useState(null)     // 本轮进度（日志尾部 + 阶段）
+      const [dmInfo, setDmInfo] = React.useState(null)     // 私信收件人的识别结果 { name, level } / { error }
+      const [dmBusy, setDmBusy] = React.useState(false)
       const [runLogFold, setRunLogFold] = React.useState(null)  // 运行日志折叠：null = 跟随"是否在跑"
       // ⚠️ 输入框必须绑"本地草稿"：页面每 5 秒轮询 /status，服务端那份会把 config 盖掉
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
@@ -933,7 +935,7 @@ window.__ModuleLoader__.load({
         setMentionBusy(true)
         setMentionInfo(null)
         try {
-          const r = await jpost('/resolve-user', { uid })
+          const r = await jpost('/resolve-user', { uid, target: 'mention' })
           if (r?.ok) {
             setMention(r.name)
             setMentionInfo({ name: r.name, level: r.level })
@@ -946,6 +948,20 @@ window.__ModuleLoader__.load({
           setMentionInfo({ error: String(e?.message ?? e) })
           say(String(e?.message ?? e), 'warn')
         } finally { setMentionBusy(false) }
+      }
+
+      /* ⭐ 私信收件人的识别（2026-10-20）：只回昵称给界面确认，**不写 mentionName**
+       *    —— 那是评论里 @ 的人，写错会串到公开评论上。 */
+      const onResolveDmUid = async () => {
+        const uid = Math.max(0, Number(dmUid) || 0)
+        if (!uid) { setDmInfo({ error: '先填 UID' }); return }
+        setDmBusy(true); setDmInfo(null)
+        try {
+          const r = await jpost('/resolve-user', { uid, target: 'dm' })
+          if (r?.ok) { setDmInfo({ name: r.name, level: r.level }); say('私信收件人：' + r.name, 'good') }
+          else { setDmInfo({ error: r?.error || '解析失败' }); say(r?.error || '解析失败', 'warn') }
+        } catch (e) { setDmInfo({ error: String(e?.message ?? e) }) }
+        finally { setDmBusy(false) }
       }
 
       const onSaveText = async () => {
@@ -1046,10 +1062,13 @@ window.__ModuleLoader__.load({
             h('div', { 'data-bd-row-desc': '' },
               `今日已挑 ${st.pickedToday ?? 0} / ${cfg.perDayMax || '不限'} 条`
               + (st.running ? ' · 日志每 2 秒刷新，跑完自动停' : '')),
+            (st.lastError && !st.running)
+              ? h('div', { 'data-bd-msg': '', 'data-warn': '' }, '⚠️ 上一轮没成功：' + st.lastError.hint)
+              : null,
             lines.length
               ? h(LogFold, {
-                label: '运行日志',
-                desc: `（末尾 ${Math.min(lines.length, 20)} 行）`,
+                label: '本轮运行输出',
+                desc: `（末尾 ${Math.min(lines.length, 20)} 行 · 这份是这一轮的模型输出，插件自己的事件在 duty.log）`,
                 text: lines.slice(-20).join('\n'),
                 open: foldOpen,
                 onToggle: () => setRunLogFold(!foldOpen),
@@ -1354,13 +1373,19 @@ window.__ModuleLoader__.load({
           dmOn ? h('div', { 'data-bd-sub': '' },
             h(Row, {
               label: '私信收件人 UID',
-              desc: 'B站 数字 UID',
-            }, h('input', {
-              'data-bd-input': '', 'data-bd-w-sm': '', type: 'number', min: 0, value: dmUid ?? '',
-              placeholder: 'UID',
-              onChange: (e) => setDmUid(e.target.value),
-              onBlur: () => { const n = Math.max(0, Number(dmUid) || 0); setDmUid(n ? String(n) : ''); patch({ dmUid: n }, '私信收件人 UID') },
-            })),
+              desc: dmInfo?.name
+                ? `已识别：${dmInfo.name}${dmInfo.level ? '（Lv' + dmInfo.level + '）' : ''}`
+                : (dmInfo?.error ? '识别失败：' + dmInfo.error : '填 B站 UID，点「识别」确认发给谁'),
+            }, h('div', { 'data-bd-inline': '' },
+              h('input', {
+                'data-bd-input': '', 'data-bd-w-sm': '', type: 'number', min: 0, value: dmUid ?? '',
+                placeholder: 'UID',
+                onChange: (e) => { setDmUid(e.target.value); setDmInfo(null) },
+                onBlur: () => { const n = Math.max(0, Number(dmUid) || 0); setDmUid(n ? String(n) : ''); patch({ dmUid: n }, '私信收件人 UID') },
+              }),
+              h('button', {
+                'data-bd-btn': '', disabled: dmBusy || !dmUid, onClick: onResolveDmUid,
+              }, dmBusy ? '识别中…' : '识别'))),
             h('div', { 'data-bd-row-desc': '' },
               '私信内容为本轮各条的「标题 + 链接 + 一句话理由」，每轮合并为一条（不受 150 字限制）。'),
             h('div', { 'data-bd-row-desc': '' },

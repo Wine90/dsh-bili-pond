@@ -223,6 +223,21 @@ ok(idx.includes('busy: true'), '并发被挡住时没告诉调用方 busy（前�
 ok(cli.includes("disabled: busy === 'run' || Boolean(st.running)"), '「立即运行一轮」按钮没跟着 running 变灰')
 ok(idx.includes('不会重复开（返回 busy）'), 'bili_run 工具没声明"不会重复开"')
 
+// ㉒ 日志两本账：duty.log 只放事件，子进程原始输出进 run.log（混在一起就没法排查）
+ok(idx.includes("const runLogFile = join(stateDir, 'run.log')"), '没有 run.log：原始输出还在往 duty.log 里灌')
+ok(/appendFileSync\(runLogFile/.test(idx), '子进程输出没写到 run.log')
+ok(!/appendFileSync\(logFile, String\(buf\)/.test(idx), 'pick 又把原始输出写回 duty.log 了')
+
+// ㉓ 失败要给一句人话（分类 + 下一步），别让使用者去翻日志才知道为什么
+ok(idx.includes('classifyRunFailure'), '没有失败分类')
+ok(idx.includes('lastError'), '失败原因没存进 state（界面看不到）')
+ok(cli.includes('上一轮没成功'), '界面没显示失败原因')
+
+// ㉔ 私信收件人也能识别昵称，且不能写到 mentionName（那是评论 @ 的人）
+ok(idx.includes("target === 'mention'"), 'resolve-user 没区分 mention / dm 两个用途')
+ok(cli.includes("target: 'dm'"), '私信收件人没有识别按钮')
+ok(cli.includes('setDmInfo'), '私信识别结果没地方显示')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

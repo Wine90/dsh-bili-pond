@@ -223,6 +223,11 @@ export function apply(ctx, config) {
     } catch (e) { log('记 sync-failed 失败：' + (e && e.message ? e.message : e)) }
   }
   const logFile = join(stateDir, 'duty.log')
+  /* ⭐ 两本日志（2026-10-20）：
+   *    duty.log —— **结构化事件**（谁触发的、开始了、几次工具调用、发没发评论、结束码）
+   *    run.log  —— 那一轮子进程的**原始输出**（模型会边想边打印，又长又吵），每轮开头清空
+   *  以前两者混在一个文件里 ⇒ 265 KB 全是模型独白，真要排查时得在垃圾里捞针。 */
+  const runLogFile = join(stateDir, 'run.log')
   const outDir = join(stateDir, 'out')
   mkdirSync(outDir, { recursive: true })
 
@@ -1170,6 +1175,38 @@ export function apply(ctx, config) {
    *   只记开始时间 + 触发原因；日志尾部从 duty.log 现读，不用把输出全攒在内存里。 */
   let dutyRun = null            // { startedAt: ms, why: 'manual' | 'auto' | … }
 
+  /* ⭐ 把人看不懂的失败翻成一句人话（2026-10-20）
+   *    以前一轮失败，界面只说"未启动，详见 duty.log" —— 使用者得自己去翻日志才知道是没登录、
+   *    还是模型线路不通、还是一睁眼就退出。这里按退出码 + 用时 + run.log 关键字分类。 */
+  const fmtDur = (sec) => {
+    const s = Math.max(0, Number(sec) || 0)
+    if (s < 60) return s + ' 秒'
+    const m = Math.floor(s / 60)
+    if (m < 60) return m + ' 分 ' + (s % 60) + ' 秒'
+    return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分'
+  }
+  const classifyRunFailure = (code, tookSec) => {
+    let tail = ''
+    try { tail = readFileSync(runLogFile, 'utf8').slice(-4000) } catch { /* 没有 run.log 就算了 */ }
+    const has = (re) => re.test(tail)
+    if (code === 0 && !has(/报告|out\/|###\s*BV/i) && tookSec < 20) {
+      return { code: 'too_fast', hint: '开跑几秒就以成功退出，但没写报告 —— 多半是 dsh 或模型线路没配好（可点「连通性检测」）' }
+    }
+    if (has(/NO_ADAPTER|ACCOUNT_SIGN_IN_REQUIRED|401|403/)) {
+      return { code: 'model', hint: '模型线路没通（凭据/线路名不对）—— 到「高级设置 → 运行模型线路」重新选一条' }
+    }
+    if (has(/MISSING_CREDENTIAL|未登录|401/)) {
+      return { code: 'login', hint: 'B站 没登录或凭证失效 —— 点「扫码登录」重扫一次' }
+    }
+    if (has(/ETIMEDOUT|ENOTFOUND|ECONNRESET|fetch failed/i)) {
+      return { code: 'network', hint: '网络请求失败（连不上 B站 或模型服务）—— 稍后重试，或检查代理' }
+    }
+    if (code !== 0) {
+      return { code: 'exit_' + code, hint: `子进程异常退出（code=${code}）—— 详情在 run.log 的末尾` }
+    }
+    return null
+  }
+
   const runDuty = (why = 'window') => {
    try {
     /* ⭐ 同一时间只允许一轮（2026-10-20）：按钮灰掉只是防手滑，
@@ -1195,7 +1232,7 @@ export function apply(ctx, config) {
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
     //      现在改成"设定由插件读进来、内联进提示词" ✓，cwd 回到插件家 ✓）
     const cwd = stateDir
-    log(`B站鱼塘开跑（${why}）：${dsh.command} ${args.slice(0, 3).join(' ')} …  cwd=${cwd}`)
+    log(`开跑（${why === 'manual' ? '手动' : why === 'noon' ? '中午' : why === 'night' ? '夜间' : why}）· 模型 ${cfg.dutyProvider || '跟随默认'}/${cfg.dutyModel || '默认'} · 本轮上限 ${Number(cfg.perRoundMax) || 0} 条`)
     const child = spawn(dsh.command, args, {
       cwd,
       shell: dsh.shell,
@@ -1211,31 +1248,53 @@ export function apply(ctx, config) {
     //    (`EBUSY`) `appendFileSync` 会抛异常 —— 而这里是 **stream 的 data 回调**，没人接
     //    ⇒ **未捕获异常 ⇒ 整个 DSH 宿主被杀**（所有会话一起没）。跟 10-14 定时器那次是同一类 ✗
     //    ⇒ ⭐ 规矩：**插件里任何写日志/写文件的地方都包好 try/catch**，再错也只该"这一轮没跑成" ✓
+    /* ⭐ 子进程输出写 run.log（不是 duty.log）—— 那是"原始输出流"，不是事件。
+     *    每轮开跑前先清空 ⇒ 这个文件永远只装**最近一轮**，不会越长越大。
+     *    写不进去就丢：这里是 stream 回调，抛一次就把整个宿主带走。 */
+    try { writeFileSync(runLogFile, '', 'utf8') } catch { /* 清不掉也无所谓，继续追加 */ }
     const pick = (buf) => {
-      try { appendFileSync(logFile, String(buf), 'utf8') } catch { /* 写不进去就丢，绝不能抛 */ }
+      try { appendFileSync(runLogFile, String(buf), 'utf8') } catch { /* 绝不能抛 */ }
     }
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
     dutyRun = { startedAt: Date.now(), why }
+    const startedMs = Date.now()
     child.on('exit', (code) => {
+      const tookSec = Math.round((Date.now() - startedMs) / 1000)
       dutyRun = null
-      log(`B站鱼塘结束（${why}，code=${code}）`)
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
       rotateLogIfBig()            // ⭐ 日志别无声地长（三天 797KB ⇒ 一年约 100MB）
-      // ⭐ 这一轮挑了几条：从今天的报告里数（上一轮挑的还在同一份文件里 ⇒ 数出来就是全天的账）
+      /* ⭐ 结束事件带上"用时 + 挑中数 + 失败分类" —— 界面上直接能给一句人话，
+       *    不用使用者自己去 duty.log 里翻。 */
+      let pickedNow = 0
       try {
         const st = readJson(dutyStateFile, {})
         const prev = st.day === dayKey() ? Number(st.picked || 0) : 0
         const picked = countPickedToday()   // 报告是事实来源、state 只是兜底（跟闸门同一个算法）
-        if (picked > prev) { bumpState({ picked }); log(`今天挑到 ${picked} 条（上限 ${Number(cfg.perDay) || 0} 条）`) }
+        pickedNow = picked
+        if (picked > prev) bumpState({ picked })
       } catch (e) { log(`数挑了几条时出错（不影响这一轮）：${e?.message ?? e}`) }
+      const fail = classifyRunFailure(code, tookSec)
+      if (!fail) {
+        log(`结束 · 用时 ${fmtDur(tookSec)} · 本轮挑中 ${pickedNow} 条（今天共 ${countPickedToday()} 条）`)
+        // 这一轮成了 ⇒ 清掉上一次的失败记录（否则界面会一直挂着早就好了的错误）
+        try { if (readJson(dutyStateFile, {}).lastError) bumpState({ lastError: null }) } catch { /* 清不掉也不影响 */ }
+      } else {
+        log(`结束但没成功 · 用时 ${fmtDur(tookSec)} · ${fail.hint}`)
+        bumpState({ lastError: { at: new Date().toISOString(), ...fail } })
+      }
       // ⭐ 发完评论之后**过一会儿再核一次**（2026-10-16 加的「评论发出后复核」）：
       //    接口回"发送成功"≠ 公开可见（新号/风控会进审核）；而"不公开"时连 @ 通知都不会推 ⇒
       //    插件会以为发了、下一轮不再发 ⇒ 一条都没到人。等 90 秒再查，避免把"还在审核"误判成"没发出去"。
       const verifyTimer = setTimeout(() => { Promise.resolve(runVerify('round')).catch((e) => log('复核异常：' + (e?.message ?? e))) }, 90_000)
       verifyTimer.unref?.()   // 别为了一次复核把宿主进程的退出拖住 90 秒
     })
-    child.on('error', (e) => { dutyRun = null; log(`B站鱼塘起不来：${e?.message ?? e}`) })
+    child.on('error', (e) => {
+      dutyRun = null
+      const err = String(e?.message ?? e)
+      log(`起不来 · ${err}`)
+      bumpState({ lastError: { at: new Date().toISOString(), code: 'spawn_failed', hint: '子进程起不来：' + err } })
+    })
     return { started: true, why, profile: cfg.headlessProfile, cwd, log: logFile }
    } catch (e) {
     dutyRun = null
@@ -1817,6 +1876,11 @@ export function apply(ctx, config) {
       runStartedAt: dutyRun ? new Date(dutyRun.startedAt).toISOString() : null,
       runElapsedSec: dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0,
       runWhy: dutyRun ? dutyRun.why : null,
+      /* ⭐ 上一轮为什么没成功（分类 + 一句人话），成功跑完会自动清掉 */
+      lastError: (() => {
+        const e = readJson(dutyStateFile, {}).lastError
+        return e && e.at ? e : null
+      })(),
       // ── 本地转写那一套的状态（设置页要显示进度）──
       asrReady: asrReadyNow(),
       // 模型下没下（免得界面写"就绪"、其实还得现下）
@@ -1843,13 +1907,14 @@ export function apply(ctx, config) {
     const path = url.pathname
     if (req.method === 'GET' && path === '/api/bili-pond/status') return sendJson(res, 200, status())
 
-    /* ⭐ 「本轮进度」（2026-10-20）：设置页在跑的时候轮询这个，日志尾部 + 派生阶段。
-     *    只读 duty.log 的尾部，不在内存里攒输出；日志被别的进程占着也不抛（try/catch）。 */
+    /* ⭐ 「本轮进度」（2026-10-20）：设置页在跑的时候轮询这个。
+     *    数据源是 **run.log**（那一轮的原始输出，每轮清空），不是 duty.log（结构化事件）。
+     *    两者分开之后，这里显示的就是"这一轮在干什么"，不会掺进重启噪音和上一个月的记录。 */
     if (req.method === 'GET' && path === '/api/bili-pond/runlog') {
       const n = Math.max(5, Math.min(Number(url.searchParams.get('n')) || 30, 200))
       let lines = []
       try {
-        const raw = readFileSync(logFile, 'utf8')
+        const raw = readFileSync(runLogFile, 'utf8')
         lines = raw.split('\n').filter((l) => l.trim()).slice(-n)
           .map((l) => l.replace(/\u001b\[[0-9;]*m/g, '').trim().slice(0, 300))
       } catch { lines = [] }
@@ -1892,6 +1957,8 @@ export function apply(ctx, config) {
     if (req.method === 'POST' && path === '/api/bili-pond/resolve-user') {
       const body = await readBody(req)
       const uid = Math.max(0, Number(body?.uid) || 0)
+      // ⭐ 这个接口被两处用：@ 谁（写 mentionName）+ 私信收件人（只回昵称，不覆盖 mentionName）
+      const target = String(body?.target || 'mention')
       if (!uid) return sendJson(res, 200, { ok: false, error: 'UID 为空' })
       try {
         const raw = await call('bili_user_info', { uid })
@@ -1899,8 +1966,13 @@ export function apply(ctx, config) {
         if (typeof raw === 'string') { try { info = JSON.parse(raw) } catch { /* 保持原样 */ } }
         const name = String(info?.name || '').trim()
         if (!name) return sendJson(res, 200, { ok: false, error: '解析不到昵称（UID 可能不存在）', raw: String(raw).slice(0, 200) })
-        // 解析成功 ⇒ 顺手把两个字段都落盘（外加深链到 DSH 设置层）
-        await persistCfg({ mentionUid: uid, mentionName: name })
+        if (target === 'mention') {
+          // 解析成功 ⇒ 顺手把两个字段都落盘（外加深链到 DSH 设置层）
+          await persistCfg({ mentionUid: uid, mentionName: name })
+        } else {
+          // 私信收件人：只记 UID，昵称只回给界面显示（不写 mentionName，否则会串到评论的 @ 上）
+          await persistCfg({ dmUid: uid })
+        }
         return sendJson(res, 200, { ok: true, uid, name, face: info?.face || '', level: info?.level ?? null })
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })

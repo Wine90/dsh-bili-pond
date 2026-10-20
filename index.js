@@ -517,11 +517,11 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_whoami',
-    description: '看 B站 那边登录的是谁（凭证是否有效、昵称、mid）。第一次用要先在「刷B站」设置页里扫码登录。',
+    description: '看 B站 那边登录的是谁（凭证是否有效、昵称、mid）。第一次用要先在「B站鱼塘」设置页里扫码登录。',
     parameters: {},
     async execute() {
       if (!hasCredential()) {
-        return { ok: false, loggedIn: false, hint: '还没登录：去 dsh 设置页的「刷B站」里点「扫码登录」（凭证会存在插件自己的数据目录里）' }
+        return { ok: false, loggedIn: false, hint: '还没登录：去 dsh 设置页的「B站鱼塘」里点「扫码登录」（凭证会存在插件自己的数据目录里）' }
       }
       const r = await call('bili_check_credential', {})
       return { ok: true, ...(typeof r === 'object' ? r : { raw: r }) }
@@ -710,7 +710,7 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_setup',
-    description: '给刷B站装运行环境：在插件数据目录建一个**独立 venv**、装上那个 Python MCP 的依赖，装完自动把 `pythonPath` 指过去。\n'
+    description: '给B站鱼塘装运行环境：在插件数据目录建一个**独立 venv**、装上那个 Python MCP 的依赖，装完自动把 `pythonPath` 指过去。\n'
       + '**第一次用之前跑一次**。⭐ 它**起完就返回、不等装完**（几分钟的活），进度看数据目录里的 `install.log`。',
     parameters: {},
     async execute() { return runInstall() },
@@ -718,7 +718,7 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_config',
-    description: '读 / 改「刷B站」的设置。不给 `patch` 就是读；给了就改（只认 schema 里的字段）。\n'
+    description: '读 / 改「B站鱼塘」的设置。不给 `patch` 就是读；给了就改（只认 schema 里的字段）。\n'
       + '例：`{"perDay":5,"peakValley":true,"noon":true,"night":true,"autoComment":false,"transcribe":false,"keywords":["DeepSeek Harness"]}`；'
       + '私信投递：`{"dmMode":"only","dmUid":12345678}`（dmMode = off / only / both）。',
     parameters: { patch: { type: 'object', additionalProperties: true, description: '要改的字段（可省）' } },
@@ -1077,7 +1077,7 @@ export function apply(ctx, config) {
       let tail = ''
       try { tail = readFileSync(logFile, 'utf8').slice(-1500) } catch { /* 读不到就算了 */ }
       writeFileSync(f, [
-        `# 刷B站 · ${dayKey()} —— 这一轮没写出报告`,
+        `# B站鱼塘 · ${dayKey()} —— 这一轮没写出报告`,
         '',
         `> ⚠️ 那一轮结束了，但没有生成正常报告（退出码 ${code}）。`,
         '> 常见原因是它卡在某个工具上反复重试、或者把预算烧完了。下一轮它会重来。',
@@ -1106,7 +1106,7 @@ export function apply(ctx, config) {
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
     //      现在改成"设定由插件读进来、内联进提示词" ✓，cwd 回到插件家 ✓）
     const cwd = stateDir
-    log(`刷B站开跑（${why}）：${dsh.command} ${args.slice(0, 3).join(' ')} …  cwd=${cwd}`)
+    log(`B站鱼塘开跑（${why}）：${dsh.command} ${args.slice(0, 3).join(' ')} …  cwd=${cwd}`)
     const child = spawn(dsh.command, args, {
       cwd,
       shell: dsh.shell,
@@ -1128,7 +1128,7 @@ export function apply(ctx, config) {
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
     child.on('exit', (code) => {
-      log(`刷B站结束（${why}，code=${code}）`)
+      log(`B站鱼塘结束（${why}，code=${code}）`)
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
       rotateLogIfBig()            // ⭐ 日志别无声地长（三天 797KB ⇒ 一年约 100MB）
       // ⭐ 这一轮挑了几条：从今天的报告里数（上一轮挑的还在同一份文件里 ⇒ 数出来就是全天的账）
@@ -1144,10 +1144,10 @@ export function apply(ctx, config) {
       const verifyTimer = setTimeout(() => { Promise.resolve(runVerify('round')).catch((e) => log('复核异常：' + (e?.message ?? e))) }, 90_000)
       verifyTimer.unref?.()   // 别为了一次复核把宿主进程的退出拖住 90 秒
     })
-    child.on('error', (e) => log(`刷B站起不来：${e?.message ?? e}`))
+    child.on('error', (e) => log(`B站鱼塘起不来：${e?.message ?? e}`))
     return { started: true, why, profile: cfg.headlessProfile, cwd, log: logFile }
    } catch (e) {
-    log(`刷B站开跑失败（${why}）：${e?.stack ?? e}`)
+    log(`B站鱼塘开跑失败（${why}）：${e?.stack ?? e}`)
     return { started: false, why, error: String(e?.message ?? e) }
    }
   }
@@ -1485,7 +1485,7 @@ export function apply(ctx, config) {
   try {
     if (!existsSync(seenFile)) {
       writeFileSync(seenFile, [
-        '# 刷B站 · 判重表（宿主预建，那一轮只往后面追加）',
+        '# B站鱼塘 · 判重表（宿主预建，那一轮只往后面追加）',
         '',
         '## 评论记录（BV | rpid | root（楼中楼才填） | 时间 | 正文前 20 字）',
         '',

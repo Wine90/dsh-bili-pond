@@ -12,7 +12,7 @@
  *
  *     const slots = ctx.get('slots')
  *     slots.inject('settings.section', () => slots.register(
- *       { name: 'settings.section', id: 'bili-pond', order: 30, label: '刷B站' },
+ *       { name: 'settings.section', id: 'bili-pond', order: 30, label: 'B站鱼塘' },
  *       () => h(Panel),
  *     ))
  *
@@ -337,6 +337,20 @@ window.__ModuleLoader__.load({
 [data-bd-skeleton]{display:flex;flex-direction:column;gap:10px;}
 [data-bd-skeleton] div{height:56px;border-radius:10px;background:var(--bd-surface-2);}
 [data-bd-skeleton] div[data-bd-sk-narrow]{height:20px;width:40%;}
+
+/* ══ 页脚：作者 ═════════════════════════════════════════════════════════ */
+[data-bd-foot]{
+  display:flex;align-items:center;flex-wrap:wrap;gap:2px;
+  padding-top:2px;
+  font-size:12px;line-height:18px;color:var(--bd-fg-3);
+}
+[data-bd-foot] a{
+  display:inline-flex;align-items:center;
+  color:var(--bd-fg-2);text-decoration:none;border-radius:4px;
+  transition:color .12s ease;
+}
+[data-bd-foot] a:hover{color:var(--bd-accent);text-decoration:underline;}
+[data-bd-foot] [data-bd-foot-sep]{color:var(--bd-line-2);padding:0 6px;}
 
 /* ══ 窄屏 ═══════════════════════════════════════════════════════════════ */
 @media (max-width:560px){
@@ -1436,6 +1450,26 @@ window.__ModuleLoader__.load({
                 h('button', { 'data-bd-btn': '', onClick: () => onOpenFolder('home') }, '打开数据目录'),
                 h('button', { 'data-bd-btn': '', disabled: busy === 'verify', onClick: onVerify }, '复核评论'),
                 h('button', { 'data-bd-btn': '', onClick: () => copyText(st.report) }, '复制报告路径')))) : null),
+
+        /* ══ 页脚：作者 ═════════════════════════════════════════════════ */
+        /* 只放事实：谁做的、去哪找他。不放推广、不放诱导、不放联系方式以外的任何东西。 */
+        h('div', { 'data-bd-foot': '' },
+          'B站鱼塘',
+          h('span', { 'data-bd-foot-sep': '' }, '·'),
+          '作者 ',
+          h('a', {
+            href: 'https://space.bilibili.com/14430149',
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            title: '在 B站 打开「变量探索SEQVEC」的主页',
+          }, '@变量探索SEQVEC'),
+          h('span', { 'data-bd-foot-sep': '' }, '·'),
+          h('a', {
+            href: 'https://github.com/YOYOLnFu/dsh-bili-pond',
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            title: '项目仓库（MIT）',
+          }, 'GitHub')),
       )
     }
 
@@ -1452,7 +1486,7 @@ window.__ModuleLoader__.load({
         const slots = (typeof ctx.get === 'function' ? ctx.get('slots') : undefined) || ctx.slots
         if (!slots) return
         slots.inject('settings.section', () => slots.register(
-          { name: 'settings.section', id: 'bili-pond', order: 30, label: '刷B站' },
+          { name: 'settings.section', id: 'bili-pond', order: 30, label: 'B站鱼塘' },
           () => h(Panel),
         ))
       },

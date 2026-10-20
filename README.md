@@ -48,7 +48,7 @@ dsh plugin --profile desktop add link:/path/to/dsh-bili-pond
 
 ## 第一次使用（3 步）
 
-1. **设置 → 刷B站 → 安装运行环境**
+1. **设置 → B站鱼塘 → 安装运行环境**
    在插件的**数据目录**（`~/.dsh/bili-duty`，见下面「数据都在哪」）里建独立 Python 环境（`.venv`）并装依赖。几十秒到两分钟。
    完成后 `pythonPath` 会自动指向它。
 

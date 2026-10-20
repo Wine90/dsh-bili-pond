@@ -654,7 +654,7 @@ window.__ModuleLoader__.load({
       const [perRound, setPerRound] = React.useState(null)
       const [replyPer, setReplyPer] = React.useState(null)
       const [dmUid, setDmUid] = React.useState(null)        // 私信收件人 UID（本地草稿）
-      const [dmMode, setDmMode] = React.useState(null)      // 投递方式：off / only / both
+      const [dmOn, setDmOn] = React.useState(null)          // 私信开关（独立于评论）
       const [autoRun, setAutoRun] = React.useState(null)
       const [runsPerDay, setRunsPerDay] = React.useState(null)
       const [gapMin, setGapMin] = React.useState(null)
@@ -720,7 +720,7 @@ window.__ModuleLoader__.load({
         if (cfg && mention === null) setMention(cfg.mentionName || '')
         if (cfg && mentionUid === null) setMentionUid(cfg.mentionUid ? String(cfg.mentionUid) : '')
         if (cfg && dmUid === null) setDmUid(cfg.dmUid ? String(cfg.dmUid) : '')
-        if (cfg && dmMode === null) setDmMode(cfg.dmMode || 'off')
+        if (cfg && dmOn === null) setDmOn(Boolean(cfg.dmOn))
         if (cfg && autoRun === null) setAutoRun(Boolean(cfg.autoRun))
         if (cfg && runsPerDay === null) setRunsPerDay(String(cfg.autoRunsPerDay ?? 6))
         if (cfg && gapMin === null) setGapMin(String(cfg.autoGapMinutes ?? 60))
@@ -965,18 +965,15 @@ window.__ModuleLoader__.load({
       const planTone = st.installing ? 'warn'
         : (sw('autoRun') ? (inPvWindow || !sw('peakValleyOnly') ? 'ok' : undefined) : undefined)
 
-      /* ⭐ 本轮实际会投递什么 —— 判据与宿主端逐字对齐（index.js 的 commentOn / dmOn）
-       *   「评论行为」和「私信投递」是两个独立旋钮，谁都不能单独决定结果：
-       *     · dmMode='only' 会把公开评论压掉（commentOn=false）
-       *     · autoComment=false 时 dmMode='both' 实际只发私信
-       *   以前这里只看 autoComment ⇒ 选了「评论 + 私信」但评论关着时会显示成「仅生成报告」✗ */
-      const dmOn = Boolean(cfg.dmMode && cfg.dmMode !== 'off' && Number(cfg.dmUid) > 0)
-      const commentOn = Boolean(sw('autoComment') && cfg.mentionName && cfg.dmMode !== 'only')
-      const deliverNow = !commentOn && !dmOn
+      /* ⭐ 本轮实际会投递什么 —— 评论与私信是两个**独立开关**，判据与宿主端一致
+       *   （index.js 的 commentOn = autoComment && mentionName、dmOn = dmOn && dmUid） */
+      const dmActive = Boolean(dmOn && Number(dmUid) > 0)
+      const commentActive = Boolean(sw('autoComment') && cfg.mentionName)
+      const deliverNow = !commentActive && !dmActive
         ? '只生成报告，不发布任何内容'
-        : (commentOn && dmOn
+        : (commentActive && dmActive
           ? '评论 + 私信'
-          : (commentOn ? '只发公开评论' : '只发私信（不评论）'))
+          : (commentActive ? '只发公开评论' : '只发私信'))
 
       return h('div', { 'data-bd-page': '' },
 
@@ -1273,22 +1270,15 @@ window.__ModuleLoader__.load({
 
           h(Divider),
 
-          /* 私信投递：只管私信，不决定评论 */
+          /* 私信：跟评论并列的独立开关 */
           h(Row, {
-            label: '私信投递',
-            desc: '只管私信：评论公开显示在视频下，私信仅收件人可见',
-          }, h('select', {
-            'data-bd-select': '', 'data-bd-w-md': '', value: dmMode ?? 'off',
-            onChange: (e) => { setDmMode(e.target.value); patch({ dmMode: e.target.value }, '私信投递') },
-          },
-            h('option', { value: 'off' }, '不发私信'),
-            h('option', { value: 'only' }, '只发私信（不评论）'),
-            h('option', { value: 'both' }, '评论之后再发一条私信'))),
-          (!sw('autoComment') && dmMode === 'both') ? h('div', { 'data-bd-row-desc': '' },
-            '⚠️ 上面「评论行为」是关的 —— 选「评论之后再发一条私信」实际只会发私信。想让两者都发，先把「评论行为」打开。') : null,
-          (sw('autoComment') && dmMode === 'only') ? h('div', { 'data-bd-row-desc': '' },
-            '⚠️「只发私信」会压掉公开评论 —— 本轮不会在视频下评论。') : null,
-          (dmMode && dmMode !== 'off') ? h('div', { 'data-bd-sub': '' },
+            label: '私信',
+            desc: '另外私信给一个人（公开评论由上面的「评论行为」决定）',
+          }, h(Switch, {
+            on: Boolean(dmOn),
+            onChange: (v) => { setDmOn(v); patch({ dmOn: v }, '私信') },
+          })),
+          dmOn ? h('div', { 'data-bd-sub': '' },
             h(Row, {
               label: '私信收件人 UID',
               desc: 'B站 数字 UID',

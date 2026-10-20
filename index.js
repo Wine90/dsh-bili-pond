@@ -84,9 +84,15 @@ export const Config = !z ? undefined : z.object({
   subtitleProbeMax: z.natural().default(3).extra('volatile', true),
   /** 自动评论 @ 使用者（默认关 —— 会拿用户的号说话，必须他自己开） */
   autoComment: z.boolean().default(false).extra('volatile', true),
-  /** ⭐ 私信投递：off=只发评论（现状）· only=只私信（完全不公开评论）· both=评论 + 私信 */
+  /** ⭐ 私信开关（独立于评论：两个都开就是「评论 + 私信」） */
+  dmOn: z.boolean().default(false).extra('volatile', true),
+  /**
+   * ⚠️ 已废弃：旧版把私信当成「投递方式」三档（off / only / both），
+   *    结果出现「选了 both 但评论开关关着 ⇒ 实际只发私信」这种自相矛盾。
+   *    现在只留字段做**老配置迁移**（见 migrateCfg），逻辑一律看 dmOn。
+   */
   dmMode: z.string().default('off').extra('volatile', true),
-  /** ⭐ 私信发给谁的 UID（数字）。要在 dmMode 不是 off 时填 */
+  /** ⭐ 私信发给谁的 UID（数字）。私信开关打开时要填 */
   dmUid: z.natural().default(0).extra('volatile', true),
   /** 本地转写（没字幕的视频用 Whisper 转；默认关，要下模型） */
   transcribe: z.boolean().default(false).extra('volatile', true),
@@ -249,7 +255,7 @@ export function apply(ctx, config) {
     perRoundMax: 3, perDayMax: 18, transcribePerDay: 10,
     minDurationMin: 0, maxDurationMin: 60, preferSubtitle: true, subtitleProbeMax: 3,
     noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
-    dmMode: 'off', dmUid: 0,
+    dmOn: false, dmMode: 'off', dmUid: 0,
     keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
   }
   const normalize = (src, base) => {
@@ -364,6 +370,15 @@ export function apply(ctx, config) {
     if (hasLegacyPv && raw.peakValley === true && !Object.prototype.hasOwnProperty.call(raw, 'autoRun')) {
       out.autoRun = true
       out.peakValleyOnly = true
+    }
+    /* dmOn（2026-10-20）：私信从「投递方式三档」改成独立开关。
+     *   老文件没有 dmOn ⇒ 由 dmMode 反推：off→关，only/both→开。
+     *   而且 dmMode=only 的旧语义是「一条公开评论都不发」⇒ 顺手把 autoComment 关掉，
+     *   保证老用户升级后行为不变（否则会突然开始发评论）。 */
+    if (!Object.prototype.hasOwnProperty.call(raw, 'dmOn')) {
+      const legacyDm = String(raw.dmMode || 'off')
+      out.dmOn = legacyDm !== 'off'
+      if (legacyDm === 'only') out.autoComment = false
     }
     return out
   }
@@ -593,15 +608,13 @@ export function apply(ctx, config) {
       force: { type: 'boolean', description: '本人当场让你发的，传 true 越过"自动评论关着"的闸' },
     },
     async execute(args) {
-      // dmMode==='only' 时本轮根本不该发公开评论 —— 在工具层也一并挡掉（除非当场 force）
-      const commentOn = Boolean(cfg.autoComment && cfg.mentionName && cfg.dmMode !== 'only')
+      // 评论开关关着 / 没填「要 @ 谁」⇒ 工具层也挡掉（除非当场 force）
+      const commentOn = Boolean(cfg.autoComment && cfg.mentionName)
       if (!commentOn && !args.force) {
         return {
           ok: false,
           blocked: true,
-          hint: cfg.dmMode === 'only'
-            ? '现在是「只私信」模式（dmMode=only）—— 规定不发公开评论，改成用 bili_send_message 私信。确实要发时传 force: true。'
-            : '要发评论得同时满足两条：设置里开着「自动评论并 @ 你」、并且填了「要 @ 谁」。或者本人当场让你发时传 force: true。',
+          hint: '要发评论得同时满足两条：设置里开着「评论」、并且填了「要 @ 谁」。或者本人当场让你发时传 force: true。',
         }
       }
       return call('bili_reply', {
@@ -614,14 +627,14 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_send_message',
-    description: '给**设置里指定的那个人**发私信（只在「投递方式」含私信时才有意义）。'
+    description: '给**设置里指定的那个人**发私信（只在设置页「私信」打开时才有意义）。'
       + '🔴🔴 硬闸：收件人只能是设置页里的「私信收件人 UID」——'
       + '**绝不发给视频 UP 主、也不发给任何其他人**（传别的 UID 会被拒绝）。'
-      + '🔴 dmMode=off 时也会拒绝（除非本人当场让你发，传 force: true）。',
+      + '🔴 私信开关关着时也会拒绝（除非本人当场让你发，传 force: true）。',
     parameters: {
       receiver_uid: { type: 'number', description: '收件人 UID（数字）' },
       text: { type: 'string', description: '私信正文；B站 私信有 500 字符上限' },
-      force: { type: 'boolean', description: '本人当场让你发的，传 true 越过 dmMode=off 的闸' },
+      force: { type: 'boolean', description: '本人当场让你发的，传 true 越过私信开关的闸' },
     },
     async execute(args) {
       const allowed = Number(cfg.dmUid) || 0
@@ -641,11 +654,11 @@ export function apply(ctx, config) {
           allowedUid: allowed,
         }
       }
-      if (cfg.dmMode === 'off' && !args.force) {
+      if (!cfg.dmOn && !args.force) {
         return {
           ok: false,
           blocked: true,
-          hint: '现在是「仅发布评论」模式（dmMode=off）—— 设置页把「投递方式」改成「仅发送私信」或「评论 + 私信」才能发私信。确实要发时传 force: true。',
+          hint: '私信开关是关的 —— 设置页「私信」打开、并填好收件人 UID 才能发。确实要发时传 force: true。',
         }
       }
       return call('bili_send_message', { receiver_uid: allowed, text: String(args.text ?? '') })
@@ -673,7 +686,7 @@ export function apply(ctx, config) {
         }])),
         peakValley: cfg.peakValley,
         autoComment: cfg.autoComment,
-        dmMode: cfg.dmMode,
+        dmOn: Boolean(cfg.dmOn),
         dmUid: Number(cfg.dmUid) || 0,
         transcribe: cfg.transcribe,
         loggedIn: hasCredential(),
@@ -734,8 +747,8 @@ export function apply(ctx, config) {
   tool({
     name: 'bili_config',
     description: '读 / 改「B站鱼塘」的设置。不给 `patch` 就是读；给了就改（只认 schema 里的字段）。\n'
-      + '例：`{"perDay":5,"peakValley":true,"noon":true,"night":true,"autoComment":false,"transcribe":false,"keywords":["DeepSeek Harness"]}`；'
-      + '私信投递：`{"dmMode":"only","dmUid":12345678}`（dmMode = off / only / both）。',
+      + '例：`{"autoRun":true,"perRoundMax":3,"perDayMax":18,"keywords":["DeepSeek Harness"]}`；'
+      + '评论与私信是两个独立开关：`{"autoComment":true,"mentionUid":14430149,"dmOn":true,"dmUid":12345678}`。',
     parameters: { patch: { type: 'object', additionalProperties: true, description: '要改的字段（可省）' } },
     async execute(args) {
       let host = null
@@ -892,10 +905,12 @@ export function apply(ctx, config) {
     const probeMax = Math.max(1, Number(cfg.subtitleProbeMax) || 3)
     const transCap = Math.max(0, Number(cfg.transcribePerDay) || 0)
     const transUsed = asrUsedToday()
-    // ⭐ 投递方式（2026-10-17 加）：dmMode = off（只评论）· only（只私信）· both（都发）
-    //    commentOn 是"这一轮到底能不能发公开评论"的唯一判据（工具层的闸用的是同一套逻辑）
-    const commentOn = Boolean(cfg.autoComment && cfg.mentionName && cfg.dmMode !== 'only')
-    const dmOn = Boolean(cfg.dmMode !== 'off' && Number(cfg.dmUid) > 0)
+    // ⭐ 评论与私信是**两个独立开关**（2026-10-20 改）：
+    //    评论 = autoComment（还要填了 mentionName 才有 @ 对象）
+    //    私信 = dmOn（还要填了 dmUid）
+    //    两个都开 = 评论 + 私信；工具层的闸用的是同一套判据。
+    const commentOn = Boolean(cfg.autoComment && cfg.mentionName)
+    const dmOn = Boolean(cfg.dmOn && Number(cfg.dmUid) > 0)
     return `你是这个账号的 B站 助手。`
       + `下面是使用者的设定（如果有）—— **按它来**，别用你默认那套人格。`
       + ownerDoc
@@ -952,11 +967,9 @@ export function apply(ctx, config) {
       + `这是**给以后检索用**的（报告是给人看的，归档是给"回头翻"用的），别省略、也别只写挑中的。`
       + `自动评论并 @ ${cfg.mentionName || '（还没填要 @ 谁）'}${cfg.mentionUid ? '（UID ' + Number(cfg.mentionUid) + '）' : ''} 是${commentOn
         ? `开着的（每轮最多 ${cfg.commentPerRound} 条评论，每条在正文里纯文本 @ ${cfg.mentionName}，150 字内）`
-        : (cfg.dmMode === 'only'
-          ? '关着的 —— 当前是「**只私信**」模式：**这一轮一条公开评论都不许发**，改走私信'
-          : '关着的（只写报告，别发评论）')}。`
+        : '关着的（只写报告，别发评论）'}。`
       + (dmOn
-        ? `⭐⭐ **私信投递**：用 bili_send_message 把这一轮的结果发到 UID **${Number(cfg.dmUid)}**。`
+        ? `⭐⭐ **私信**：用 bili_send_message 把这一轮的结果发到 UID **${Number(cfg.dmUid)}**。`
           + `内容**别照抄评论那套**：把本轮每条值得的写成 **标题 + 链接 + 一句话理由**`
           + `（私信是私人渠道、不占别人的地方，可以比评论长一点，但**别啰嗦**）。`
           + `🔴🔴 **但私信有长度上限 —— 实测 500 字符就顶了**：`
@@ -964,14 +977,14 @@ export function apply(ctx, config) {
           + `所以**一条私信务必控制在 500 字以内、最多塞 4~5 条** —— 宁可少放一条，也别整条被拒；`
           + `⚠️ **被拒了就精简一次重发**（删理由、砍条目），**别原样无脑重试** ✗。`
           + `🔴🔴 **私信是写给「人」看的，必须是干净的人话** —— **不许出现任何设置名 / 内部术语 / 台账口径** ✗：`
-          + `dmMode、only、aiReply、判据、白名单、prompt、token、复核 这类词，**一个都不许出现在私信正文里**；`
+          + `内部字段名、判据、白名单、prompt、token、复核 这类词，**一个都不许出现在私信正文里**；`
           + `**更不许写「公开评论一条没发 / 楼中楼跳过」这种内部机制说明** ✗`
           + `（那是在跟使用者念操作手册，可读性极差）。他关心的只有：**这次挑了哪几条、为什么值得**。`
           + `（想交代"没别的了"就用一句人话，比如「今天没什么新的了」；`
           + `⚠️ **不要**把「无字幕跳过 N 条」这种统计口径搬进私信 —— 那是**报告**里写的，不是私信里写的。）`
           + `⚠️ 私信里**不用 @ 任何人**；⚠️ **一轮只发一条私信**（多条合并成一条）；`
           + `⚠️ 私信里**不要**写"本鱼 / 本鲸 / 主人 / 人家"那套；⚠️ 发完把"已私信"记进报告（**报告里**可以写口径）。`
-          + (cfg.dmMode === 'both' ? `⚠️ 现在是 **both**：公开评论照发（走下面那一整套规矩），私信**另外**再发一条。` : '')
+          + (commentOn ? `⚠️ 评论和私信都开着：公开评论照发（走下面那一整套规矩），私信**另外**再发一条。` : '')
         : '')
       + (cfg.replyToComments
         ? `回复评论：开着（每轮最多回 ${Number(cfg.replyPerRound) || 1} 条）—— 只回「直接回复到你那条评论下面的人」，回完记进报告；找不到你那条评论就跳过，别硬找。`
@@ -997,8 +1010,8 @@ export function apply(ctx, config) {
   const mcpWhitelist = () => {
     const list = ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info']
     if (cfg.autoComment || cfg.replyToComments) list.push('bili_reply')   // 只有真要发评论才给这只
-    // ⭐ 私信：dmMode 不是 off 才给这只（2026-10-20 修：以前一直没放行 ⇒ 私信功能是死的）
-    if (cfg.dmMode && cfg.dmMode !== 'off') list.push('bili_send_message')
+    // ⭐ 私信：开关打开才给这只
+    if (cfg.dmOn) list.push('bili_send_message')
     return list
   }
 
@@ -1806,7 +1819,7 @@ export function apply(ctx, config) {
       const body = await readBody(req)
       const patch = {}
       for (const k of ['perDay', 'peakValley', 'noon', 'night', 'autoComment', 'transcribe', 'asrModel',
-        'commentPerRound', 'mentionName', 'mentionUid', 'dmMode', 'dmUid',
+        'commentPerRound', 'mentionName', 'mentionUid', 'dmOn', 'dmMode', 'dmUid',
         // 2026-10-20 自动运行 / 配额 / 时长 / 字幕优先 / 熔断
         'autoRun', 'autoRunsPerDay', 'autoGapMinutes', 'peakValleyOnly',
         'perRoundMax', 'perDayMax', 'transcribePerDay',
@@ -1815,7 +1828,8 @@ export function apply(ctx, config) {
         if (k in body) patch[k] = body[k]
       }
       // ⭐ 范围钳制 + 两份都写（config.json / DSH 原生设置页），统一走 persistCfg —— 见文件上方
-      // ⭐ 私信那两个字段的合法值（2026-10-17 摘 PR #9；其余范围钳制统一在 persistCfg 里）
+      // ⭐ 私信字段的合法值（2026-10-17 摘 PR #9；其余范围钳制统一在 persistCfg 里）
+      if ('dmOn' in patch) patch.dmOn = Boolean(patch.dmOn)
       if ('dmMode' in patch) patch.dmMode = ['off', 'only', 'both'].includes(String(patch.dmMode)) ? String(patch.dmMode) : 'off'
       if ('dmUid' in patch) patch.dmUid = Math.max(0, Math.min(Number(patch.dmUid) || 0, Number.MAX_SAFE_INTEGER))
       const { clean, host } = await persistCfg(patch)

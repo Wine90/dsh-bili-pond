@@ -182,10 +182,14 @@ ok(idx.includes('ELECTRON_RUN_AS_NODE'), '桌面版 spawn 没带 ELECTRON_RUN_AS
 ok(idx.includes('process.resourcesPath'), '桌面版找不到 dsh 时没有去应用目录里找')
 ok(idx.includes('找不到 dsh'), '找不到 dsh 时没有出声（静默失败）')
 
-// ⑯ 私信投递（摘 PR #9）：默认必须关、收信人要 UID、正文有 500 字上限
-ok(/dmMode: z\.string\(\)\.default\('off'\)/.test(idx), 'dmMode 默认不是 off（会改变老用户的行为）')
+// ⑯ 私信是独立开关（摘 PR #9）：默认必须关、收信人要 UID、正文有 500 字上限
+ok(/dmOn: z\.boolean\(\)\.default\(false\)/.test(idx), 'dmOn 默认不是 false（会改变老用户的行为）')
 ok(idx.includes('commentOn'), '没有 commentOn 这个统一判据（工具闸和提示词会各说各话）')
 ok(duty.includes('500') || idx.includes('500'), '私信没写 500 字上限（超了接口直接拒）')
+// 评论与私信必须互相独立：判据里不能出现 dmMode（那是旧的"投递方式三档"，会压掉评论）
+ok(!/const commentOn = Boolean\(cfg\.autoComment && cfg\.mentionName && cfg\.dmMode/.test(idx), 'commentOn 又依赖 dmMode 了（评论被私信档位压掉了）')
+ok(/const dmOn = Boolean\(cfg\.dmOn && Number\(cfg\.dmUid\) > 0\)/.test(idx), 'dmOn 判据没改成独立开关')
+ok(!idx.includes('dmMode === \'only\'') && !idx.includes("dmMode === 'both'"), '代码里还有旧的 dmMode 三档判断')
 
 // ⑰ 「有 N 项未能同步」只能报真失败（local-override 是「面板说了算」的账，不是失败账）
 ok(!idx.includes('notSynced: Object.keys(readOverride())'), 'notSynced 又拿 local-override 当失败列表了（会常驻误报）')
@@ -206,11 +210,11 @@ ok(idx.includes('noForm: true'), 'noForm 没被标出来（会被当成同步失
 ok(idx.includes('if (host.ok || host.noForm) markSyncFailed'), 'persistCfg 没把 noForm 排除在失败之外')
 ok(cli.includes('!r.host.noForm'), '前端还是把 noForm 报成「同步失败」')
 
-// ⑳ 界面上的「本轮会做」必须跟宿主端判据一致（评论开关 / 私信投递是两个旋钮）
-ok(cli.includes("cfg.dmMode !== 'only'"), '前端算 commentOn 时没考虑 dmMode=only 会压掉评论')
-ok(/const commentOn = Boolean\(sw\('autoComment'\) && cfg\.mentionName && cfg\.dmMode !== 'only'\)/.test(cli), '前端的 commentOn 判据与 index.js 不一致')
-ok(cli.includes('只发私信（不评论）'), '缺「选了『评论+私信』但评论关着 ⇒ 实际只发私信」这种口径')
-ok(cli.includes('实际只会发私信'), '缺"评论关着但选了评论+私信"的冲突提示')
+// ⑳ 界面上的「本轮会做」必须跟宿主端判据一致：评论、私信是两个独立开关
+ok(cli.includes('const commentActive = Boolean(sw(\'autoComment\') && cfg.mentionName)'), '前端算「本轮会做」时评论判据与 index.js 不一致')
+ok(cli.includes('const dmActive = Boolean(dmOn && Number(dmUid) > 0)'), '前端算「本轮会做」时私信判据与 index.js 不一致')
+ok(!cli.includes("cfg.dmMode !== 'only'"), '前端还在用旧的 dmMode 三档判断')
+ok(cli.includes('只发私信') && cli.includes('评论 + 私信') && cli.includes('只发公开评论'), '「本轮会做」的四种结果文案不全')
 
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)

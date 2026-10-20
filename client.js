@@ -648,6 +648,7 @@ window.__ModuleLoader__.load({
       const [ws, setWs] = React.useState(null)
       const [rl, setRl] = React.useState(null)
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
+      const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
       // ⚠️ 输入框必须绑"本地草稿"：页面每 5 秒轮询 /status，服务端那份会把 config 盖掉
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
       const [perDay, setPerDay] = React.useState(null)
@@ -815,7 +816,10 @@ window.__ModuleLoader__.load({
           if (r && r.ok && r.latest) {
             if (r.hasNew) {
               setNewVer(r.latest)
-              say('发现新版本 v' + r.latest + '（当前 v' + r.current + '）—— 点击「升级」，完成后重启 dsh', 'warn')
+              setSelfUpgrade(r.selfUpgrade !== false)
+              say(r.selfUpgrade === false
+                ? '发现新版本 v' + r.latest + '（当前 v' + r.current + '）—— 桌面版请到「设置 → 插件」里更新'
+                : '发现新版本 v' + r.latest + '（当前 v' + r.current + '）—— 点击「升级」，完成后重启 dsh', 'warn')
             } else say('已是最新版本 v' + r.current, 'good')
           } else {
             say('无法获取最新版本（可能网络不可用）—— 当前版本 v' + ((r && r.current) || '?'))
@@ -1421,7 +1425,7 @@ window.__ModuleLoader__.load({
               h('button', { 'data-bd-btn': '', disabled: busy === 'check', onClick: onCheck }, '连通性检测'),
               h('button', { 'data-bd-btn': '', disabled: busy === 'update', onClick: onCheckUpdate }, '检查更新'),
               h('button', { 'data-bd-btn': '', disabled: busy === 'login', onClick: onLoginStart }, '扫码登录'),
-              newVer ? h('button', { 'data-bd-btn': '', 'data-primary': '', disabled: busy === 'upgrade', onClick: onUpgrade }, '升级到 v' + newVer) : null)),
+              (newVer && selfUpgrade) ? h('button', { 'data-bd-btn': '', 'data-primary': '', disabled: busy === 'upgrade', onClick: onUpgrade }, '升级到 v' + newVer) : null)),
             loginState ? h('div', {
               'data-bd-msg': '', 'data-bd-msg-gap': '',
               'data-good': loginTone === 'good' ? '' : undefined,

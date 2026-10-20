@@ -805,8 +805,18 @@ export function apply(ctx, config) {
 
   // ⭐ 一键升级：由宿主自己跑 `dsh plugin --profile web add dsh-bili-pond`
   //    ⚠️ 装完必须重启 dsh 才生效；⚠️ Windows 上"替换正在运行的插件"可能被文件占用挡住（我们踩过）
+  //    ⚠️⚠️ 桌面版（Electron 安装包）不行：它的 profile 归应用自己管，命令行 add 会被拒，
+  //         而且 profile 名也不一定是 web ⇒ 那边只提示"去「设置 → 插件」里更新"，不假装能自升级。
+  const isDesktopApp = Boolean(process.versions?.electron && process.resourcesPath)
   let upgrading = false
   const runUpgrade = () => {
+    if (isDesktopApp) {
+      return {
+        ok: false,
+        desktop: true,
+        hint: '桌面版请到「设置 → 插件」里更新（这个 profile 归应用管理，插件不能自己改自己）',
+      }
+    }
     if (upgrading) return { ok: true, busy: true, log: installLogFile, hint: '正在升级，别重复点' }
     upgrading = true
     appendInstall('\n=== ' + new Date().toISOString() + ' 开始升级（add dsh-bili-pond）===\n')
@@ -1900,7 +1910,7 @@ export function apply(ctx, config) {
 
     // 「检查更新」：⚠️ 只在用户点按钮时才联网（不偷偷发请求 ✓），结果缓存一天 ✓
     if (req.method === 'GET' && path === '/api/bili-pond/update') {
-      const out = { ok: true, current: myVersion(), latest: '', hasNew: false, page: 'https://www.npmjs.com/package/dsh-bili-pond' }
+      const out = { ok: true, current: myVersion(), latest: '', hasNew: false, selfUpgrade: !isDesktopApp, page: 'https://www.npmjs.com/package/dsh-bili-pond' }
       try {
         if (updateCache && Date.now() - updateCache.at < 24 * 3600 * 1000) out.latest = updateCache.latest
         else {

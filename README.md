@@ -49,7 +49,7 @@ dsh plugin --profile desktop add link:/path/to/dsh-bili-pond
 ## 第一次使用（3 步）
 
 1. **设置 → 刷B站 → 安装运行环境**
-   在插件家目录建独立 Python 环境（`.venv`）并装依赖。几十秒到两分钟。
+   在插件的**数据目录**（`~/.dsh/bili-duty`，见下面「数据都在哪」）里建独立 Python 环境（`.venv`）并装依赖。几十秒到两分钟。
    完成后 `pythonPath` 会自动指向它。
 
 2. **扫码登录 B站**
@@ -145,21 +145,34 @@ dsh --profile headless --patch <插件生成的 overlay> <提示词>
 6. 可选：发评论（@ 你）/ 发私信（给你）/ 回复楼中楼
 7. 写日报（markdown）+ 归档（`digest/年月.md`）
 
-工作目录 = 插件家（`<DSH_HOME>/bili-duty`），那一轮被沙箱关着，只写得进这里。
+工作目录 = 插件的数据目录（`~/.dsh/bili-duty`，见下一节），那一轮被沙箱关着，只写得进这里。
 
 ## 数据都在哪
 
+插件的运行数据**全部集中在一个目录里**，下面简称为「**数据目录**」：
+
+| 系统 | 数据目录 |
+|---|---|
+| Windows | `%USERPROFILE%\.dsh\bili-duty\` |
+| macOS / Linux | `~/.dsh/bili-duty/` |
+
+也就是「`~/.dsh` 这个 DSH 配置文件夹下的 `bili-duty` 文件夹」。
+**它跟插件安装位置无关** —— 装插件是在 `~/.dsh/profiles/<profile>/node_modules/` 里，
+重装或升级插件不会碰数据目录，所以数据不会丢。
+
+那个目录里的东西：
+
 | 文件 | 内容 |
 |---|---|
-| `<家>/config.json` | 插件自己的配置（**以这份为准**） |
-| `<家>/duty.md` | 值班章程（模型每轮读的规则，你可以改） |
-| `<家>/seen.md` | 判重表（看过哪些、发过哪些评论） |
-| `<家>/out/日期.md` | 每天的日报 |
-| `<家>/digest/年月.md` | 归档（可检索） |
-| `<家>/bili_credential.json` | B站 登录凭证（只存本机） |
-| `<家>/duty.log` | 运行日志 |
-| `<家>/.venv` | Python 环境 |
-| `<家>/.venv-asr` | 转写环境（可选） |
+| `config.json` | 插件自己的配置（**以这份为准**） |
+| `duty.md` | 值班章程（模型每轮读的规则，你可以改） |
+| `seen.md` | 判重表（看过哪些、发过哪些评论） |
+| `out/日期.md` | 每天的日报 |
+| `digest/年月.md` | 归档（可检索） |
+| `bili_credential.json` | B站 登录凭证（只存本机） |
+| `duty.log` | 运行日志 |
+| `.venv` | Python 环境 |
+| `.venv-asr` | 转写环境（可选） |
 
 > 目录名沿用 `bili-duty`（从原项目继承）。改目录名会丢失判重表、凭证和历史报告。
 
@@ -198,7 +211,7 @@ dsh --profile headless --patch <插件生成的 overlay> <提示词>
 
 **装依赖卡住、或扫码时一直不出二维码**
 
-插件会自动下一份 `uv` 到自己的家目录（免管理员、不用 PATH），依次试
+插件会自动下一份 `uv` 到自己的数据目录（免管理员、不用 PATH），依次试
 **直连 GitHub → 国内加速代理 → PyPI 镜像**，并核对官方 sha256。
 
 如果这条链路全不通：
@@ -232,7 +245,7 @@ B站 cookie 会提前失效。重新扫码即可。
 ## 开发
 
 ```sh
-node --import ./tools/register.mjs selfcheck.mjs   # 双端预检（不碰真家目录）
+node --import ./tools/register.mjs selfcheck.mjs   # 双端预检（不碰真数据目录）
 node tools/_check-1016.mjs                          # 106 条静态断言
 ```
 

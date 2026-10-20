@@ -10,13 +10,13 @@
 ## 帮用户安装时，按这个顺序
 
 1. **前提**：机器上有 `Python 3.10+` **或** `uv`（有一个即可）。
-   两个都没有**也不用让用户先装** —— 插件点「装依赖」时会**自己下一份 `uv` 到自己的家目录**
-   （免管理员、不用 PATH）；只有它自己也下不动时（网络到不了 GitHub / 加速代理 / PyPI 镜像），
+   两个都没有**也不用让用户先装** —— 插件点「装依赖」时会**自己下一份 `uv` 到自己的数据目录**
+   （`~/.dsh/bili-duty`，免管理员、不用 PATH）；只有它自己也下不动时（网络到不了 GitHub / 加速代理 / PyPI 镜像），
    才需要引导用户手动装。
    · 它是**直连 GitHub → 国内加速代理 → PyPI 镜像**依次试的，并且会**核对官方 sha256** ✓
    · ⚠️ 若用户机器上的**杀软拦了这次下载**：让他把 `%USERPROFILE%\.dsh\bili-duty\bin\` 加白，
      或干脆自己装 uv / Python 3.10+ ✓
-   · ⭐ **万一下载链路都不通**：**手动放一份 `uv.exe` 到 `<家目录>\bin\` 就行** ——
+   · ⭐ **万一下载链路都不通**：**手动放一份 `uv.exe` 到 `~/.dsh/bili-duty/bin/` 就行** ——
      插件会**用那一份、跳过下载** ✓
 2. `dsh plugin --profile desktop add dsh-bili-pond`（npm，推荐）
    · 备选：`dsh plugin --profile desktop add github:YOYOLnFu/dsh-bili-pond`
@@ -60,7 +60,7 @@
 - `client.js` —— 浏览器半端：设置页（注册在 `settings.section`）
   - 极简 markdown 渲染器 `renderMarkdown()`（报告用，无依赖，全走 React 元素不做 HTML 注入）
   - 可折叠日志 `LogFold()`
-- `lib/` —— 状态目录与家目录 / 极小的 MCP stdio 客户端 / 扫码登录 /
+- `lib/` —— 状态目录（即数据目录）与配置文件 / 极小的 MCP stdio 客户端 / 扫码登录 /
   `hostdeps.mjs`（从宿主树取 `@deepseek-ai/*`，拿不到就退到自己依赖 / 本地等价实现）/
   `verify.mjs`（评论发出后复核）
 - `prompts/duty.md` —— 一轮要做的事（判定口径 + 红线，**用户可以改**）；

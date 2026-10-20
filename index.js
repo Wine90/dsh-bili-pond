@@ -521,7 +521,7 @@ export function apply(ctx, config) {
     parameters: {},
     async execute() {
       if (!hasCredential()) {
-        return { ok: false, loggedIn: false, hint: '还没登录：去 dsh 设置页的「刷B站」里点「扫码登录」（凭证会存在插件自己的家目录里）' }
+        return { ok: false, loggedIn: false, hint: '还没登录：去 dsh 设置页的「刷B站」里点「扫码登录」（凭证会存在插件自己的数据目录里）' }
       }
       const r = await call('bili_check_credential', {})
       return { ok: true, ...(typeof r === 'object' ? r : { raw: r }) }
@@ -678,7 +678,7 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_login_start',
-    description: '开始 B站 扫码登录：出二维码（画成 PNG 存在插件家目录里，返回路径）和一个 key。\n'
+    description: '开始 B站 扫码登录：出二维码（画成 PNG 存在插件数据目录里，返回路径）和一个 key。\n'
       + '用法：拿到 PNG 后用 `present` 把它推给本人（手机 B站 → 我的 → 扫一扫），再用 `bili_login_poll` 轮询。\n'
       + '⚠️ 二维码大约 180 秒有效，出码要马上递过去；手机上确认时选「记住我」那种长期登录。',
     parameters: {},
@@ -695,7 +695,7 @@ export function apply(ctx, config) {
   tool({
     name: 'bili_login_poll',
     description: '查扫码结果：waiting 还没扫 / scanned 扫了待确认 / ok 成功 / expired 过期。'
-      + '成功时会自动把凭证写进插件家目录的 `bili_credential.json`（MCP 认的那四个字段）。',
+      + '成功时会自动把凭证写进插件数据目录的 `bili_credential.json`（MCP 认的那四个字段）。',
     parameters: { key: { type: 'string', description: 'bili_login_start 给的那个 key' } },
     async execute(args) {
       const r = await loginPoll(String(args.key ?? ''))
@@ -710,8 +710,8 @@ export function apply(ctx, config) {
 
   tool({
     name: 'bili_setup',
-    description: '给刷B站装运行环境：在插件家目录建一个**独立 venv**、装上那个 Python MCP 的依赖，装完自动把 `pythonPath` 指过去。\n'
-      + '**第一次用之前跑一次**。⭐ 它**起完就返回、不等装完**（几分钟的活），进度看家目录里的 `install.log`。',
+    description: '给刷B站装运行环境：在插件数据目录建一个**独立 venv**、装上那个 Python MCP 的依赖，装完自动把 `pythonPath` 指过去。\n'
+      + '**第一次用之前跑一次**。⭐ 它**起完就返回、不等装完**（几分钟的活），进度看数据目录里的 `install.log`。',
     parameters: {},
     async execute() { return runInstall() },
   })
@@ -930,7 +930,7 @@ export function apply(ctx, config) {
           : '**开着、但依赖没装好** ⇒ 这一轮没字幕的视频只能跳过')
         : '关着（没字幕的视频就跳过）'}；`
       + `⭐ 不管哪种情况，**报告里都要写一行「因无字幕跳过 N 条」**（N=0 也写）—— 别让它悄悄少几条。`
-      + `判重表 = ${join(stateDir, 'seen.md')}（**就是这个绝对路径**，别写到家目录 ~、也别写到别处）；`
+      + `判重表 = ${join(stateDir, 'seen.md')}（**就是这个绝对路径**，别写成 ~ 下的路径、也别写到别处）；`
       + `⚠️ 它读不出来或写不进去，**必须在报告里明说** —— 那一轮宁可不发评论，也别当成"没有记录"重发一遍。`
       + `⭐ 另外把这一轮**看过的每一条视频（挑中的和跳过的都算）**追加进归档：${join(digestDir, `${dayKey().slice(0, 7)}.md`)}`
       + ` —— 一行一条：日期 · BV 号 · 标题 · UP · 一句话结论 · 链接（跳过的那条在后面注明理由）；`
@@ -1523,7 +1523,7 @@ export function apply(ctx, config) {
     const bundled = join(stateDir, 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv')
     if (await haveUv()) return 'uv'
     if (existsSync(bundled)) return bundled
-    appendInstall('这台机器上没有 uv —— 我下一份放进插件家目录（单文件、免管理员、约 15MB，只需要一次）…\n')
+    appendInstall('这台机器上没有 uv —— 我下一份放进插件数据目录（单文件、免管理员、约 15MB，只需要一次）…\n')
     const got = await ensureUv({ dir: join(stateDir, 'bin'), log: appendInstall })
     if (got) appendInstall('uv 已就位：' + got + '\n')
     return got

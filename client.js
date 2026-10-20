@@ -965,9 +965,18 @@ window.__ModuleLoader__.load({
       const planTone = st.installing ? 'warn'
         : (sw('autoRun') ? (inPvWindow || !sw('peakValleyOnly') ? 'ok' : undefined) : undefined)
 
-      const deliveryTxt = !sw('autoComment')
-        ? '仅生成报告'
-        : (cfg.dmMode === 'only' ? '仅私信' : cfg.dmMode === 'both' ? '评论 + 私信' : '发布评论')
+      /* ⭐ 本轮实际会投递什么 —— 判据与宿主端逐字对齐（index.js 的 commentOn / dmOn）
+       *   「评论行为」和「私信投递」是两个独立旋钮，谁都不能单独决定结果：
+       *     · dmMode='only' 会把公开评论压掉（commentOn=false）
+       *     · autoComment=false 时 dmMode='both' 实际只发私信
+       *   以前这里只看 autoComment ⇒ 选了「评论 + 私信」但评论关着时会显示成「仅生成报告」✗ */
+      const dmOn = Boolean(cfg.dmMode && cfg.dmMode !== 'off' && Number(cfg.dmUid) > 0)
+      const commentOn = Boolean(sw('autoComment') && cfg.mentionName && cfg.dmMode !== 'only')
+      const deliverNow = !commentOn && !dmOn
+        ? '只生成报告，不发布任何内容'
+        : (commentOn && dmOn
+          ? '评论 + 私信'
+          : (commentOn ? '只发公开评论' : '只发私信（不评论）'))
 
       return h('div', { 'data-bd-page': '' },
 
@@ -1201,7 +1210,7 @@ window.__ModuleLoader__.load({
           /* 三段式：关闭 / 只发评论 / 发评论+回楼中楼 */
           h(Row, {
             label: '评论行为',
-            desc: '私信另在下面单独设置',
+            desc: `本轮会做：${deliverNow}`,
           }, h('select', {
             'data-bd-select': '', 'data-bd-w-md': '',
             value: !sw('autoComment') ? 'off' : (sw('replyToComments') ? 'reply' : 'comment'),
@@ -1264,17 +1273,21 @@ window.__ModuleLoader__.load({
 
           h(Divider),
 
-          /* 私信投递 */
+          /* 私信投递：只管私信，不决定评论 */
           h(Row, {
             label: '私信投递',
-            desc: '评论公开显示在视频下；私信仅收件人可见',
+            desc: '只管私信：评论公开显示在视频下，私信仅收件人可见',
           }, h('select', {
             'data-bd-select': '', 'data-bd-w-md': '', value: dmMode ?? 'off',
             onChange: (e) => { setDmMode(e.target.value); patch({ dmMode: e.target.value }, '私信投递') },
           },
             h('option', { value: 'off' }, '不发私信'),
-            h('option', { value: 'only' }, '只发私信（不发公开评论）'),
-            h('option', { value: 'both' }, '评论 + 私信'))),
+            h('option', { value: 'only' }, '只发私信（不评论）'),
+            h('option', { value: 'both' }, '评论之后再发一条私信'))),
+          (!sw('autoComment') && dmMode === 'both') ? h('div', { 'data-bd-row-desc': '' },
+            '⚠️ 上面「评论行为」是关的 —— 选「评论之后再发一条私信」实际只会发私信。想让两者都发，先把「评论行为」打开。') : null,
+          (sw('autoComment') && dmMode === 'only') ? h('div', { 'data-bd-row-desc': '' },
+            '⚠️「只发私信」会压掉公开评论 —— 本轮不会在视频下评论。') : null,
           (dmMode && dmMode !== 'off') ? h('div', { 'data-bd-sub': '' },
             h(Row, {
               label: '私信收件人 UID',

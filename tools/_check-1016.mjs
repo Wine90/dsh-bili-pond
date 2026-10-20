@@ -206,6 +206,12 @@ ok(idx.includes('noForm: true'), 'noForm 没被标出来（会被当成同步失
 ok(idx.includes('if (host.ok || host.noForm) markSyncFailed'), 'persistCfg 没把 noForm 排除在失败之外')
 ok(cli.includes('!r.host.noForm'), '前端还是把 noForm 报成「同步失败」')
 
+// ⑳ 界面上的「本轮会做」必须跟宿主端判据一致（评论开关 / 私信投递是两个旋钮）
+ok(cli.includes("cfg.dmMode !== 'only'"), '前端算 commentOn 时没考虑 dmMode=only 会压掉评论')
+ok(/const commentOn = Boolean\(sw\('autoComment'\) && cfg\.mentionName && cfg\.dmMode !== 'only'\)/.test(cli), '前端的 commentOn 判据与 index.js 不一致')
+ok(cli.includes('只发私信（不评论）'), '缺「选了『评论+私信』但评论关着 ⇒ 实际只发私信」这种口径')
+ok(cli.includes('实际只会发私信'), '缺"评论关着但选了评论+私信"的冲突提示')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

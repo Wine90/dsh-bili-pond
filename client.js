@@ -751,7 +751,8 @@ window.__ModuleLoader__.load({
           const r = await jpost('/config', p)
           if (r?.config && seq === patchSeq.current) setSt((old) => ({ ...old, config: r.config }))
           // ⭐ DSH 原生设置页里显式设过的键由宿主说了算 ⇒ 我们这份也得写进去；写失败要说出来，别假装"已保存"
-          if (r?.host && r.host.ok === false) say(`${what || '设置'}：已保存到插件配置，但同步到 DSH 设置失败（${r.host.error}）`, 'warn')
+          // ⚠️ noForm 不算失败：那个部署本来就没有可写的设置表单，配置就只存在插件这边
+          if (r?.host && r.host.ok === false && !r.host.noForm) say(`${what || '设置'}：已保存到插件配置，但同步到 DSH 设置失败（${r.host.error}）`, 'warn')
           else say(what ? `${what}：已保存` : '已保存', 'good')
         } catch (e) { say(String(e?.message ?? e), 'warn') }
         finally { setSaving(false); setBusy('') }

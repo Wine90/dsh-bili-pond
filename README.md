@@ -13,6 +13,18 @@ DeepSeek Harness 插件。一次配置，之后它自己去 B站 检索、读字
 | **模型自选** | 从你 DSH 里真实注册的线路里挑，不写死 |
 | **日报可读** | 渲染 markdown，不是一坨纯文本 |
 
+## 截图
+
+设置页就在 DSH 里（设置 → B站鱼塘），下面几张是实际界面：
+
+| 总览 | 运行环境与模型 |
+|---|---|
+| ![总览](docs/screenshots/01-overview.png) | ![运行环境](docs/screenshots/02-runtime.png) |
+
+| 评论与私信（安全闸） | 内容筛选与日报 |
+|---|---|
+| ![评论与私信](docs/screenshots/03-comments.png) | ![内容筛选](docs/screenshots/04-filter.png) |
+
 ## 关于本项目的来源（重要）
 
 本项目**基于** [dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll) 0.1.10 衍生：

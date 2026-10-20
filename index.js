@@ -415,6 +415,14 @@ export function apply(ctx, config) {
       if (!e?.noForm) {
         try { return { ok: true, ns: await attempt(true), retried: true } } catch (e2) { e = e2 }
       }
+      /* ⭐ 2026-10-20（干净安装实测）：`noForm` **不是失败**。
+       *   profile 的 cordis.patch.yml 里没有本插件条目时（bundle 自带的 patch 只声明 enabled），
+       *   DSH 这边就没有可写的设置表单 —— 这是**正常的部署形态**，不是"没写进去"。
+       *   把它算成失败会让「有 N 项未能同步」整条横幅又亮起来（本机实测 11 项）。 */
+      if (e?.noForm) {
+        log('跳过写 DSH 原生设置：这个部署没有可写的设置表单（配置只落在插件自己的 config.json）')
+        return { ok: false, noForm: true, error: '这个部署没有可写的 DSH 设置表单（配置只落在插件自己的 config.json）' }
+      }
       log(`写 DSH 设置失败：${e?.message ?? e}`)
       return { ok: false, error: String(e?.message ?? e) }
     }
@@ -452,7 +460,8 @@ export function apply(ctx, config) {
     //   ⇒ 不再指望 DSH 那边：只要是从**插件面板**保存的键，读配置时一律以插件自己那份为准 ✓
     //   ⚠️ 代价：同名的项若在 DSH 原生设置页改，以插件面板为准（我们的设置页才是"正式的家"）。
     markOverride(Object.keys(clean), true)
-    if (host.ok) markSyncFailed(Object.keys(clean), false)
+    // ⭐ 只有「真有表单、但写失败」才算失败；noForm（这个部署没有设置表单）是正常的
+    if (host.ok || host.noForm) markSyncFailed(Object.keys(clean), false)
     else {
       markSyncFailed(Object.keys(clean), true)
       log('⚠️ 这几项没能同步到 DSH 原生设置，改为以插件自己的值为准：' + Object.keys(clean).join(', ') + '（' + host.error + '）')

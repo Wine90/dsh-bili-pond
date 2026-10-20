@@ -191,7 +191,7 @@ ok(duty.includes('500') || idx.includes('500'), '私信没写 500 字上限（�
 ok(!idx.includes('notSynced: Object.keys(readOverride())'), 'notSynced 又拿 local-override 当失败列表了（会常驻误报）')
 ok(idx.includes('notSynced: Object.keys(readSyncFailed())'), 'notSynced 没改成读 sync-failed.json')
 ok(idx.includes("syncFailedFile = join(stateDir, 'sync-failed.json')"), '没建 sync-failed.json 这本账')
-ok(/if \(host\.ok\) markSyncFailed/.test(idx), '写成功时没清 sync-failed（旧的失败记录会一直挂着）')
+ok(/if \(host\.ok \|\| host\.noForm\) markSyncFailed/.test(idx), '写成功（或没有设置表单）时没清 sync-failed（旧的失败记录会一直挂着）')
 
 // ⑱ 「每轮最多挑几条」必须绑 pickPerRound，不能绑 perRound（那是每轮评论上限）
 //    2026-10-20 实测：绑错后该框显示的是 commentPerRound，而且一失焦就把评论上限的数写进 perRoundMax
@@ -199,6 +199,12 @@ ok(cli.includes("value: pickPerRound ?? ''"), '「每轮最多挑几条」输入
 ok(!cli.includes('Number(perRound) || 0)); setPerRound(String(n)); patch({ perRoundMax: n })'), '「每轮最多挑几条」又绑回 perRound 了（会串到每轮评论上限）')
 ok(cli.includes("if (cfg && pickPerRound === null) setPickPerRound(String(cfg.perRoundMax ?? 3))"), 'pickPerRound 没从 perRoundMax 回填')
 ok(cli.includes("if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))"), 'perRound 没从 commentPerRound 回填')
+
+// ⑲ noForm（这个部署没有可写的 DSH 设置表单）不能算同步失败
+//   2026-10-20 干净安装实测：bundle-only 部署下每个键都会"写失败"，横幅又亮 11 项
+ok(idx.includes('noForm: true'), 'noForm 没被标出来（会被当成同步失败）')
+ok(idx.includes('if (host.ok || host.noForm) markSyncFailed'), 'persistCfg 没把 noForm 排除在失败之外')
+ok(cli.includes('!r.host.noForm'), '前端还是把 noForm 报成「同步失败」')
 
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)

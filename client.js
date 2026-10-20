@@ -698,6 +698,11 @@ window.__ModuleLoader__.load({
       const [models, setModels] = React.useState(null)
       const [dutyProv, setDutyProv] = React.useState('')
       const [dutyModel, setDutyModel] = React.useState('')
+      const [profileMsg, setProfileMsg] = React.useState('')
+      const reloadModels = async () => {
+        try { const d = await jget('/models'); if (d?.ok) { setModels(d); return d } } catch { /* 拿不到就降级 */ }
+        return null
+      }
       React.useEffect(() => {
         let alive2 = true
         const load = async () => {
@@ -706,6 +711,28 @@ window.__ModuleLoader__.load({
         load()
         return () => { alive2 = false }
       }, [])
+      /* ⭐ 把「只在桌面装了的线路插件」一键装进值班 profile（2026-10-20）。
+       *    必须用户点：这是往他机器里装第三方包，不能静默做。 */
+      const installToProfile = async (x) => {
+        if (!x || !x.package) return
+        const prof = (models && models.profile) || 'headless'
+        setBusy('profile-add'); setProfileMsg('')
+        try {
+          const r = await jpost('/profile-add', { package: x.package, profile: prof })
+          if (r?.ok) {
+            setProfileMsg('已装到「' + prof + '」，正在重新读取模型…')
+            const d = await reloadModels()
+            const ok = d && (d.providers || []).some((p) => p.id === x.id && p.usable !== false)
+            setProfileMsg(ok ? '装好了，现在可以选 ' + x.name + ' 了。' : '装完了，但还没识别到。重启一次 DSH 再试。')
+          } else {
+            setProfileMsg('装失败：' + (r?.error || '') + (r?.output ? '\n' + String(r.output).slice(-500) : ''))
+          }
+        } catch (e) {
+          setProfileMsg('装失败：' + (e?.message ?? e))
+        } finally {
+          setBusy('')
+        }
+      }
       /* ⚠️ 只在「第一次拿到配置」时回填：status 每 5 秒轮询一次，无条件回填会把
        *    用户正在选的值冲回旧值（跟上面 perDay 那些输入框同一类坑）。 */
       const dutyFilled = React.useRef(false)
@@ -1446,6 +1473,9 @@ window.__ModuleLoader__.load({
           advOpen ? h('div', { 'data-bd-card-body': '' },
             (() => {
               const list = (models && models.providers) || []
+              const profileName = (models && models.profile) || 'headless'
+              const missing = list.filter((x) => x.usable === false && x.package)
+              const fallback = list.find((x) => x.id === 'deepseek-account' && x.usable !== false)
               const cur = list.find((x) => x.id === (dutyProv || '')) || null
               const curModels = cur ? (cur.models || []) : []
               const provOpts = [h('option', { value: '', key: '__default' }, '跟随 headless 默认（推荐）')]
@@ -1471,6 +1501,24 @@ window.__ModuleLoader__.load({
                 modelOpts.push(h('option', { key: m.id, value: m.id }, m.name !== m.id ? (m.name + ' · ' + m.id) : m.name))
               }
               return h('div', null,
+                missing.length > 0 ? h('div', { 'data-bd-row-desc': '' },
+                  '检测到 ' + missing.map((x) => x.name).join('、') + ' 只装在桌面配置里；鱼跑的是「' + profileName + '」。',
+                  h('div', { 'data-bd-btns': '' },
+                    h('button', {
+                      'data-bd-btn': '',
+                      disabled: busy === 'profile-add',
+                      onClick: () => installToProfile(missing[0]),
+                    }, busy === 'profile-add' ? '正在装…' : '装到 ' + profileName),
+                    fallback ? h('button', {
+                      'data-bd-btn': '',
+                      onClick: () => {
+                        setDutyProv(fallback.id)
+                        setDutyModel('')
+                        patch({ dutyProvider: fallback.id, dutyModel: '' }, '运行模型线路')
+                      },
+                    }, '改用 ' + fallback.name) : null),
+                  profileMsg ? h('div', { 'data-bd-row-desc': '', style: { whiteSpace: 'pre-wrap' } }, profileMsg) : null)
+                  : null,
                 h(Row, {
                   label: '运行模型线路',
                   desc: (models && !models.profileKnown)

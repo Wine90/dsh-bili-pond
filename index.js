@@ -145,6 +145,17 @@ const pyEnv = (extra = {}) => ({
   ...extra,
 })
 
+/**
+ * ⭐ 已知的「provider id → 提供它的插件包名」。
+ *    用途：设置页发现这条线路只在桌面配置里装了、值班 profile 里没有时，
+ *    可以一键把它装进值班 profile —— 不用让用户自己去查包名。
+ *    新插件可以往这里加；查不到包名时前端只提示，不给按钮。
+ */
+const PROVIDER_PACKAGES = {
+  workbuddy: 'dsh-connect-workbuddy',
+  'workbuddy-global': 'dsh-connect-workbuddy',
+}
+
 export function apply(ctx, config) {
   const pluginDir = dirname(fileURLToPath(import.meta.url))
   // ⭐ 自己的版本号（从 package.json 读，设置页要显示它）
@@ -935,6 +946,39 @@ export function apply(ctx, config) {
     log('⚠️ 找不到 dsh：桌面版多半不是 npm 全局安装的 ⇒ 请在设置里把「dsh 路径」指到 <应用目录>/…/@deepseek-ai/dsh/lib/bin.js，或改用 npm 装的 dsh')
     return { command: 'dsh', args: [], shell: true }
   }
+
+  /**
+   * ⭐ 跑一次 dsh CLI 并收集输出（给「把线路插件装到值班 profile」用）。
+   *    跟 modelsInProfile 同一套桌面版兼容：process.execPath + ELECTRON_RUN_AS_NODE。
+   */
+  const runDshCapture = (extraArgs, timeoutMs = 240_000) => new Promise((resolve) => {
+    const dsh = resolveDsh()
+    let child
+    try {
+      child = spawn(dsh.command, [...dsh.args, ...extraArgs], {
+        cwd: stateDir,
+        shell: dsh.shell,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: pyEnv(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      })
+    } catch (e) {
+      return resolve({ ok: false, code: -1, text: String(e?.message ?? e) })
+    }
+    let text = ''
+    const cap = (b) => { if (text.length < 2_000_000) text += String(b) }
+    child.stdout?.on('data', cap)
+    child.stderr?.on('data', cap)
+    let done = false
+    const finish = (r) => { if (!done) { done = true; resolve(r) } }
+    child.on('error', (e) => finish({ ok: false, code: -1, text: String(e?.message ?? e) }))
+    child.on('exit', (code) => finish({ ok: code === 0, code, text }))
+    const t = setTimeout(() => {
+      try { child.kill() } catch { /* 无妨 */ }
+      finish({ ok: false, code: -2, text: text + '\n[超时]' })
+    }, timeoutMs)
+    t.unref?.()
+  })
 
   const promptFor = () => {
     // ⭐ 章程取哪一份：家里那份优先（ensureCharter 保证铺好；他改过的话就是他那份，升级的事由 ensureCharter 记账处理）
@@ -2049,11 +2093,17 @@ export function apply(ctx, config) {
         ...((inProfile.providers) || []),
         ...((inProfile.plugins) || []),
       ])
-      const providers = (here.providers || []).map((p) => ({
-        ...p,
+      const providers = (here.providers || []).map((p) => {
         // 这条线路在值班那个 profile 里能不能用（不能就置灰/提示）
-        usable: !inProfile.ok ? null : (usable.has(p.id) || [...usable].some((n) => n.includes(p.id))),
-      }))
+        const canUse = !inProfile.ok ? null : (usable.has(p.id) || [...usable].some((n) => n.includes(p.id)))
+        return {
+          ...p,
+          usable: canUse,
+          // ⭐ 前端用：这条线路只在当前进程有、值班 profile 没有时，给一个「装过去」的包名
+          package: PROVIDER_PACKAGES[p.id] || '',
+          reason: canUse === false ? 'not-in-profile' : '',
+        }
+      })
       return sendJson(res, 200, {
         ok: true,
         current: { provider: cfg.dutyProvider || '', model: cfg.dutyModel || '' },
@@ -2061,6 +2111,36 @@ export function apply(ctx, config) {
         profileKnown: Boolean(inProfile.ok),
         profileError: inProfile.ok ? '' : (inProfile.error || ''),
         providers,
+      })
+    }
+
+    /**
+     * ⭐ 把「提供某条线路的插件」装进值班 profile。
+     *    起因（2026-10-20）：用户先装了 WorkBuddy（desktop），再装鱼塘；
+     *    鱼塘跑 headless，那边没有 WorkBuddy ⇒ 设置页里 WorkBuddy 灰着，
+     *    但提示只说「该 profile 未安装」，用户不知道该怎么装。
+     *    这里由前端点按钮触发；**不自动装**（会往用户机器里装第三方包）。
+     */
+    if (req.method === 'POST' && path === '/api/bili-pond/profile-add') {
+      const body = await readBody(req)
+      const pkg = String(body?.package || '').trim()
+      const profile = String(body?.profile || cfg.headlessProfile || 'headless').trim()
+      if (!/^(@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(pkg)) {
+        return sendJson(res, 200, { ok: false, error: '包名不合法：' + pkg })
+      }
+      if (!/^[A-Za-z0-9._-]+$/.test(profile)) {
+        return sendJson(res, 200, { ok: false, error: 'profile 名不合法：' + profile })
+      }
+      log(`装线路插件到 profile「${profile}」：${pkg}`)
+      const r = await runDshCapture(['plugin', '--profile', profile, 'add', pkg])
+      log(`装线路插件结束：${pkg} → ${profile}，code=${r.code}`)
+      return sendJson(res, 200, {
+        ok: r.ok,
+        code: r.code,
+        profile,
+        package: pkg,
+        error: r.ok ? '' : '安装失败（code=' + r.code + '）',
+        output: String(r.text || '').slice(-6000),
       })
     }
 

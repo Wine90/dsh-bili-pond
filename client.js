@@ -755,6 +755,11 @@ window.__ModuleLoader__.load({
         return () => { alive = false; if (timer) clearInterval(timer) }
       }, [runningNow])
 
+      /* ⭐ 评论上限的天花板（2026-10-20）：评的就是"挑中的那几条"，所以不可能超过每轮挑中数。
+       *    再叠一个 5 的硬顶（个人号不宜批量刷）。挑 0 条时给 0 —— 那一轮压根没有可评的对象。 */
+      const pickCap = Math.max(0, Number(pickPerRound ?? cfg?.perRoundMax ?? 3) || 0)
+      const commentCap = Math.min(5, pickCap)
+
       const win = { ...DEFAULT_WINDOWS, ...(st?.windows || {}) }
 
       const say = (text, tone) => {
@@ -1318,14 +1323,15 @@ window.__ModuleLoader__.load({
           sw('autoComment') ? h('div', { 'data-bd-sub': '' },
             h(Row, {
               label: '每轮评论上限',
-              desc: '设为 0 则本轮不发布评论',
+              desc: `设为 0 则本轮不发布评论。最多 ${commentCap} 条（跟着「每轮最多挑几条」走）`,
             }, h('input', {
-              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 0, max: 5,
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 0, max: commentCap,
               value: perRound ?? '',
               onChange: (e) => setPerRound(e.target.value),
-              // ⭐ 0 是合法值（= 这一轮不发评论）；UI 上限收紧到 5（个人号不宜批量刷）
-              //    后端 clampPatch 仍允许到 20，避免老配置被强改
-              onBlur: () => { const n = Math.max(0, Math.min(Number(perRound) || 0, 5)); setPerRound(String(n)); patch({ commentPerRound: n }, '每轮评论上限') },
+              // ⭐ 0 是合法值（= 这一轮不发评论）
+              // ⭐ 上限 = min(5, 每轮最多挑几条)：挑 3 条却允许发 5 条评论是不可能发生的事，
+              //    评的就是挑中的那几条 —— 没东西可评。后端 clampPatch 也按同一条规矩钳一次。
+              onBlur: () => { const n = Math.max(0, Math.min(Number(perRound) || 0, commentCap)); setPerRound(String(n)); patch({ commentPerRound: n }, '每轮评论上限') },
             })),
             h(Row, {
               label: '在评论里 @ 谁',

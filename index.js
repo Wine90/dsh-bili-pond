@@ -291,7 +291,13 @@ export function apply(ctx, config) {
   /* ⭐ 所有数值范围都收在这里：HTTP 写、工具写、读回来三道口子共用一份口径 */
   const clampPatch = (patch) => {
     const p = { ...patch }
-    const num = (k, lo, hi, dflt) => { if (k in p) p[k] = Math.max(lo, Math.min(Number(p[k]) || dflt, hi)) }
+    /* ⚠️ 这里以前是 `Number(p[k]) || dflt` —— **0 是 falsy，会被 dflt 顶掉** ✗
+     *    ⇒ 「每轮最多挑几条 = 0（只跑不挑）」「每天最多挑几条 = 0」「转写熔断 = 0」
+     *      「时长下限 = 0」这些界面明说合法的值，全部存不进去、被悄悄改回默认。
+     *    ⇒ 现在只有**真的不是数字**（NaN）才退到默认值，0 原样保留。
+     *    （2026-10-20 写 commentPerRound 的钳制测试时抓到的） */
+    const nums = (v, dflt) => { const n = Number(v); return Number.isFinite(n) ? n : dflt }
+    const num = (k, lo, hi, dflt) => { if (k in p) p[k] = Math.max(lo, Math.min(nums(p[k], dflt), hi)) }
     // 老的 perDay：保留钳制（迁移用），但新 UI 不再写它
     if ('perDay' in p) p.perDay = Math.max(0, Math.min(Number(p.perDay) || 0, 120))
     if ('reportLevel' in p) p.reportLevel = ['full', 'brief', 'off'].includes(String(p.reportLevel)) ? String(p.reportLevel) : 'full'
@@ -305,6 +311,30 @@ export function apply(ctx, config) {
     num('perRoundMax', 0, 20, 3)             // 每轮最多挑几条
     num('perDayMax', 0, 120, 18)             // 每天最多挑几条（上限 120 = 理论极限）
     num('transcribePerDay', 0, 50, 10)       // 每日转写熔断
+
+    /* ⭐ 评论上限不能超过每轮挑中数（2026-10-20）
+     *    评论的对象只能是"这一轮挑中的视频" ⇒ 挑 3 条却想发 5 条评论是不可能发生的，
+     *    那个 5 只是个永远不生效的摆设，用户会以为设置没生效。
+     *    这里在**写入时**就钳下来（不只在界面上限制），直接 POST 也绕不过去。
+     *    注：只钳 commentPerRound，不反过来动 perRoundMax —— 用户的意图是"挑几条"，
+     *    不该因为一个次要上限被悄悄调小。
+     *
+     *    ⚠️ 顺序很重要：**先**确定 perRoundMax，**再**钳 commentPerRound。
+     *       同一份 patch 里两个都带时（比如一次保存里挑中数 3→0、评论上限 3），
+     *       如果先钳评论就会拿"还没更新的旧 perRoundMax"去比 ⇒ 钳不干净。
+     *       （2026-10-20 实测踩到：挑 0 条时评论上限还留着 3） */
+    {
+      // ⚠️ 这里是函数定义（在 cfg 之前），运行时才执行 ⇒ 用 savedCfg() 现读，别直接引用 cfg
+      const savedNow = (() => { try { return savedCfg() } catch { return {} } })()
+      const pk = Math.max(0, Number(('perRoundMax' in p) ? p.perRoundMax : (savedNow.perRoundMax ?? DEFAULTS.perRoundMax)) || 0)
+      if ('commentPerRound' in p) {
+        p.commentPerRound = Math.min(Number(p.commentPerRound) || 0, pk)
+      } else if ('perRoundMax' in p) {
+        // 调小挑中数时，把已存的评论上限一起顺下来（否则又变成摆设）
+        const old = Number(savedNow.commentPerRound) || 0
+        if (old > pk) p.commentPerRound = pk
+      }
+    }
 
     /* ── 时长过滤：分钟。两个都 0 = 不限；min > max 时自动对调 ── */
     num('minDurationMin', 0, 600, 0)

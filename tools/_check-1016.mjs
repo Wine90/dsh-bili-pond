@@ -238,6 +238,14 @@ ok(idx.includes("target === 'mention'"), 'resolve-user 没区分 mention / dm �
 ok(cli.includes("target: 'dm'"), '私信收件人没有识别按钮')
 ok(cli.includes('setDmInfo'), '私信识别结果没地方显示')
 
+// ㉕ 评论上限不能超过每轮挑中数（挑 3 条却设 5 条评论 = 那个 5 永远不生效）
+ok(idx.includes('p.commentPerRound = Math.min(Number(p.commentPerRound) || 0, pk)'), '没有把评论上限钳到每轮挑中数')
+ok(cli.includes('const commentCap = Math.min(5, pickCap)'), '界面没按每轮挑中数限制评论上限')
+
+// ㉖ 0 必须是合法值：clampPatch 里不能用 `Number(x) || dflt`（0 是 falsy，会被默认值顶掉）
+ok(!/const num = \(k, lo, hi, dflt\) => \{ if \(k in p\) p\[k\] = Math\.max\(lo, Math\.min\(Number\(p\[k\]\) \|\| dflt, hi\)\) \}/.test(idx), 'num() 又用 || 兜底了 —— 0（只跑不挑）会被改回默认值')
+ok(idx.includes('Number.isFinite(n) ? n : dflt'), 'num() 没改成只对 NaN 兜底')
+
 console.log(fail.length ? '❌ 有 ' + fail.length + ' 条没过（共 ' + total + ' 条）：' : `✅ 全部 ${total} 条断言通过`)
 for (const f of fail) console.log('   - ' + f)
 process.exit(fail.length ? 1 : 0)

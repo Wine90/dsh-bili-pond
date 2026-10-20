@@ -1511,8 +1511,13 @@ export function apply(ctx, config) {
       for (const c of declared) {
         const id = String(c?.provider || '')
         if (!id) continue
-        const cur = byId.get(id)
-        if (cur) continue                        // 已激活的优先，别被 dormant 条目覆盖
+        if (byId.has(id)) continue               // 已激活的优先，别被 dormant 条目覆盖
+        /* ⚠️⚠️ 关键过滤（2026-10-20 第二次修）：`listConfigurableProviders()` 会把 DSH
+         *    内置的**全部**线路都列出来（40 多条：amazon-bedrock、openai、xai…），
+         *    这些对使用者毫无意义 —— 全塞进下拉会变成一长串灰条目，比"看不到 workbuddy"更糟 ✗
+         *    ⇒ 只收「用户显式声明过」的那些（`declared: true`）。
+         *      实测：用户装过的 workbuddy 会带 declared:true，内置的那些没有。 */
+        if (c?.declared !== true) continue
         byId.set(id, {
           id,
           name: String(c?.displayName || id),

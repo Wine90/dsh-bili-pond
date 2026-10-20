@@ -650,6 +650,7 @@ window.__ModuleLoader__.load({
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
       const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
       const [runLog, setRunLog] = React.useState(null)     // 本轮进度（日志尾部 + 阶段）
+      const [runLogFold, setRunLogFold] = React.useState(null)  // 运行日志折叠：null = 跟随"是否在跑"
       // ⚠️ 输入框必须绑"本地草稿"：页面每 5 秒轮询 /status，服务端那份会把 config 盖掉
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
       const [perDay, setPerDay] = React.useState(null)
@@ -1033,17 +1034,26 @@ window.__ModuleLoader__.load({
           const lines = Array.isArray(L.lines) ? L.lines : []
           const sec = st.running ? (L.elapsedSec || st.runElapsedSec || 0) : 0
           const mm = Math.floor(sec / 60); const ss = String(sec % 60).padStart(2, '0')
+          /* ⭐ 日志默认折叠（2026-10-20）：跑着的时候展开（这时候才关心），跑完了默认收起。
+           *    用户手动点过就记住他的选择（runLogFold !== null 之后一律听他的）。 */
+          const foldOpen = runLogFold !== null ? runLogFold : Boolean(st.running)
           return h(Card, {
             title: '本轮进度',
             desc: st.running
               ? `跑着（${st.runWhy === 'manual' ? '手动' : st.runWhy || '自动'}）· 已用时 ${mm}:${ss}${L.stage ? ' · 当前：' + L.stage : ''}`
-              : (lines.length ? '上一轮已结束（下面是它的日志尾部）' : ''),
+              : (lines.length ? '上一轮已结束' : ''),
           },
-            st.running ? h('div', { 'data-bd-row-desc': '' }, '日志每 2 秒刷新一次，跑完会自动停。') : null,
             h('div', { 'data-bd-row-desc': '' },
-              `今日已挑 ${st.pickedToday ?? 0} / ${cfg.perDayMax || '不限'} 条`),
+              `今日已挑 ${st.pickedToday ?? 0} / ${cfg.perDayMax || '不限'} 条`
+              + (st.running ? ' · 日志每 2 秒刷新，跑完自动停' : '')),
             lines.length
-              ? h('div', { 'data-bd-pre': '' }, lines.slice(-20).join('\n'))
+              ? h(LogFold, {
+                label: '运行日志',
+                desc: `（末尾 ${Math.min(lines.length, 20)} 行）`,
+                text: lines.slice(-20).join('\n'),
+                open: foldOpen,
+                onToggle: () => setRunLogFold(!foldOpen),
+              })
               : h('div', { 'data-bd-row-desc': '' }, '（还没有日志：这一轮刚开始，或者日志被清了）'))
         })() : null,
 

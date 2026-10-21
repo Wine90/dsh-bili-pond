@@ -1190,23 +1190,41 @@ export function apply(ctx, config) {
   /** 上一次 hostPatchFile() 试过哪几个位置（设置页排错用） */
   let patchCandsSeen = []
   const hostPatchFile = () => {
+    /** 候选：[文件, 是否可信]。可信 = 明确指定（env），否则要求路径像 `<…>/profiles/<name>/cordis.patch.yml`
+     *  —— 免得往上走时撞上**包自己带的** patch（`…/node_modules/@deepseek-ai/dsh/cordis.patch.yml` 之类） */
     const cands = []
-    const add = (p) => { const s = String(p || '').trim(); if (s && !cands.includes(s)) cands.push(s) }
+    const add = (p, trusted = false) => {
+      const s = String(p || '').trim()
+      if (!s) return
+      if (cands.some(([q]) => q === s)) return
+      cands.push([s, trusted])
+    }
     const dir = String(process.env.DSH_PROFILE_DIR || '').trim()
-    /* ⭐ 第一顺位：插件自己的位置倒推 profile 根 —— 这份补丁就是"加载我的那个 profile"的，
-     *    比 env 更可信（env 可能指向别的 profile，或者干脆是空的）。 */
-    add(join(pluginDir, '..', '..', 'cordis.patch.yml'))
-    if (dir) add(join(dir, 'cordis.patch.yml'))
+    /* ⭐⭐ 第一顺位：插件自己的位置倒推 profile 根 —— 这份补丁就是"加载我的那个 profile"的，
+     *    比 env 更可信（env 可能指向别的 profile，或者干脆是空的）。
+     *    同时往上多走几级：pnpm 的软链布局会落在 `node_modules/.pnpm/<pkg>@x/node_modules/<pkg>`，
+     *    真正的 profile 根在上好几层（Node 默认解析成 realpath，所以插件看到的自己是那个深路径）。 */
+    let up = pluginDir
+    for (let i = 0; i < 6; i++) {
+      up = join(up, '..')
+      add(join(up, 'cordis.patch.yml'))
+    }
+    /* 兜底：环境变量（CLI 版会设；Electron 宿主进程里是空的） */
+    if (dir) add(join(dir, 'cordis.patch.yml'), true)
     const home = String(process.env.DSH_HOME || '').trim()
     const prof = String(process.env.DSH_PROFILE || '').trim()
-    if (home && prof) add(join(home, 'profiles', prof, 'cordis.patch.yml'))
-    patchCandsSeen = cands.map((c) => {
+    if (home && prof) add(join(home, 'profiles', prof, 'cordis.patch.yml'), true)
+    patchCandsSeen = cands.map(([file, trusted]) => {
       let exists = false
-      try { exists = existsSync(c) } catch { exists = false }
-      return { file: c, exists }
+      try { exists = existsSync(file) } catch { exists = false }
+      const okPath = trusted || /[\\/]profiles[\\/][^\\/]+[\\/]cordis\.patch\.yml$/.test(file)
+      return { file, exists, okPath }
     })
-    for (const c of cands) {
-      try { if (existsSync(c)) return c } catch { /* 下一个 */ }
+    for (const [file, trusted] of cands) {
+      let exists = false
+      try { exists = existsSync(file) } catch { exists = false }
+      if (!exists) continue
+      if (trusted || /[\\/]profiles[\\/][^\\/]+[\\/]cordis\.patch\.yml$/.test(file)) return file
     }
     return ''
   }

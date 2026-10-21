@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-pond",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "B站鱼塘 —— 每天派鱼去 B站 捞几条值得看的。自动运行和评论默认关闭，要用在自己开。",
   "keywords": [
     "dsh",

@@ -6,8 +6,12 @@
 //
 // ⚠️ 这里不是"源码里有没有这句话"的字符串检查：那套只能防手滑，防不住逻辑写错。
 //    所以把 index.js 里那几段**真源码**切出来，塞进沙箱里跑，用临时目录当宿主 profile 验证行为。
+//
+// ⚠️⚠️ 2026-10-21 补的教训：沙箱没喂 `existsSync` / `pluginDir` 时，`hostPatchFile()` 一走就抛，
+//    测试照样"通过"（只覆盖了 env 分支）—— 真实 Electron 宿主里 `DSH_PROFILE_DIR` 是空的，
+//    结果线上整块功能静默失效。所以下面 ①/⑤ 专门跑"没有任何 DSH_* 环境变量"的情形。
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,14 +31,16 @@ ok(b > a, 'index.js 里找不到 writeRouteOverlay')
 const src = idx.slice(a, idx.lastIndexOf('/**', b) > a ? idx.lastIndexOf('/**', b) : b)
 
 const logs = []
-const build = (cfg) => new Function(
-  'cfg', 'log', 'readFileSync', 'join', 'process',
+/* ⚠️ 沙箱必须把源码里用到的依赖都喂进去，否则"通过"只是恰好没走到那条路。 */
+const build = (cfg, pluginDir) => new Function(
+  'cfg', 'log', 'readFileSync', 'join', 'process', 'existsSync', 'pluginDir',
   src + '\nreturn { splitPatchBlocks, routeOverlayYml, hostPatchFile, ROUTE_SKIP_IDS }',
-)(cfg, (m) => logs.push(String(m)), readFileSync, join, process)
+)(cfg, (m) => logs.push(String(m)), readFileSync, join, process, existsSync, pluginDir)
 
 // ── 造一个假的宿主 profile 补丁层 ──
 const dir = mkdtempSync(join(tmpdir(), 'pond-routes-'))
-mkdirSync(join(dir, 'profiles', 'desktop'), { recursive: true })
+const profileDir = join(dir, 'profiles', 'desktop')
+mkdirSync(join(profileDir, 'node_modules'), { recursive: true })
 const patch = `- id: agent-default-model
   config:
     provider: workbuddy-local
@@ -71,15 +77,22 @@ const patch = `- id: agent-default-model
     - id: some-inserted
       name: '@x/y'
 `
-const patchFile = join(dir, 'profiles', 'desktop', 'cordis.patch.yml')
-writeFileSync(patchFile, patch, 'utf8')
+writeFileSync(join(profileDir, 'cordis.patch.yml'), patch, 'utf8')
 
-const oldDir = process.env.DSH_PROFILE_DIR
-process.env.DSH_PROFILE_DIR = join(dir, 'profiles', 'desktop')
+/** 插件装在 `<profile>/node_modules/dsh-bili-pond` ⇒ 源码靠这个位置倒推 profile 根 */
+const PLUGIN_DIR = join(profileDir, 'node_modules', 'dsh-bili-pond')
 
-// ① 正常情况：只带模型相关、且没被 disabled 的那块
+const envBackup = {}
+for (const k of ['DSH_PROFILE_DIR', 'DSH_HOME', 'DSH_PROFILE']) envBackup[k] = process.env[k]
+/** 模拟 Electron 宿主：一个 DSH_* 环境变量都没有 */
+const noEnv = () => { for (const k of Object.keys(envBackup)) delete process.env[k] }
+
+// ① 真实场景：**没有任何 DSH_* 环境变量**，只靠插件自己的位置倒推（线上就是这么坏的）
 {
-  const h = build({ reuseRoutes: true })
+  noEnv()
+  const h = build({ reuseRoutes: true }, PLUGIN_DIR)
+  ok(h.hostPatchFile() === join(profileDir, 'cordis.patch.yml'),
+    '没有 DSH_* 环境变量时找不到宿主补丁层（Electron 宿主就是这种情形 ⇒ 整块功能静默失效）')
   const yml = h.routeOverlayYml()
   const text = yml.join('\n')
   ok(yml.length > 0, 'routeOverlayYml() 什么都没生成（宿主明明有 llm-pi-ai 那块）')
@@ -102,14 +115,16 @@ process.env.DSH_PROFILE_DIR = join(dir, 'profiles', 'desktop')
 
 // ② 关掉开关 ⇒ 一个字都不带（用户另一个选择：失败也照旧跑）
 {
-  const h = build({ reuseRoutes: false })
+  noEnv()
+  const h = build({ reuseRoutes: false }, PLUGIN_DIR)
   ok(h.routeOverlayYml().length === 0, 'reuseRoutes=false 时还在往 overlay 里塞东西')
 }
 
-// ③ 宿主补丁层读不到 ⇒ 静默返回空（不许因此让值班跑不起来）
+// ③ 哪都找不到补丁层 ⇒ 静默返回空（不许因此让值班跑不起来）
 {
+  noEnv()
   process.env.DSH_PROFILE_DIR = join(dir, 'profiles', 'nope')
-  const h = build({ reuseRoutes: true })
+  const h = build({ reuseRoutes: true }, join(dir, 'not-a-profile', 'node_modules', 'dsh-bili-pond'))
   let threw = null
   let yml = []
   try { yml = h.routeOverlayYml() } catch (e) { threw = e }
@@ -119,29 +134,44 @@ process.env.DSH_PROFILE_DIR = join(dir, 'profiles', 'desktop')
 
 // ④ 只有 DSH_HOME + DSH_PROFILE 时也要能找到（CLI 版没有 DSH_PROFILE_DIR）
 {
-  delete process.env.DSH_PROFILE_DIR
-  const oldHome = process.env.DSH_HOME
-  const oldProf = process.env.DSH_PROFILE
+  noEnv()
   process.env.DSH_HOME = dir
   process.env.DSH_PROFILE = 'desktop'
-  const h = build({ reuseRoutes: true })
+  const h = build({ reuseRoutes: true }, join(dir, 'not-a-profile', 'node_modules', 'dsh-bili-pond'))
   ok(h.hostPatchFile().endsWith('cordis.patch.yml'), 'DSH_HOME+DSH_PROFILE 兜底路径没算出来')
   ok(h.routeOverlayYml().length > 0, '走 DSH_HOME 兜底时没生成 overlay')
-  process.env.DSH_HOME = oldHome
-  process.env.DSH_PROFILE = oldProf
 }
 
-// ⑤ 接线检查：这三处不接上，前面再对也没用
+// ⑤ 优先级：env 指向别的 profile（装饰性补丁）时，不能盖掉"加载我的那个 profile"
+{
+  noEnv()
+  const decoy = join(dir, 'profiles', 'web')
+  mkdirSync(decoy, { recursive: true })
+  writeFileSync(join(decoy, 'cordis.patch.yml'), '- id: llm-decoy\n  config:\n    providers:\n      decoy-route:\n        baseURL: http://9.9.9.9/v1\n', 'utf8')
+  process.env.DSH_PROFILE_DIR = decoy
+  const h = build({ reuseRoutes: true }, PLUGIN_DIR)
+  ok(h.hostPatchFile() === join(profileDir, 'cordis.patch.yml'),
+    'env 里的 DSH_PROFILE_DIR 盖过了插件自己所在的 profile（会抄错文件）')
+  ok(!h.routeOverlayYml().join('\n').includes('decoy-route'), '把别的 profile 的线路也带上了')
+}
+
+// ⑥ 接线检查：这几处不接上，前面再对也没用
 ok(/const routeYml = routeOverlayYml\(\)/.test(idx), 'ensureOverlay 没调用 routeOverlayYml（值班拿不到线路）')
 ok(/const probe = writeRouteOverlay\(\)/.test(idx), '/api/bili-pond/models 探测没带 overlay（界面上的灰/亮会是假象）')
 ok(/modelsInProfile\(cfg\.headlessProfile, probe \? \{ patch: probe \} : \{\}\)/.test(idx), '两个探测点没把 patch 传进 modelsInProfile')
 ok(idx.includes('const declared = new Set()'), 'modelsInProfile 没解析 providers: 下的线路名（pi-ai 那类线路会看不见）')
 ok(/declared: \[\.\.\.declared\]/.test(idx), 'modelsInProfile 没把 declared 返回出去')
 ok(/reuseRoutes: z\.boolean\(\)/.test(idx), '设置项 reuseRoutes 没进 schema')
+/* ⭐ 界面/接口能看到"到底带没带上"（上线静默失效过，必须给排错口） */
+ok(/routePatch: hostPatchFile\(\)/.test(idx), '/api/bili-pond/models 没回 routePatch（出问题时无法排查）')
+ok(/routeIds: routeIdsSeen/.test(idx), '/api/bili-pond/models 没回 routeIds')
+ok(/routeCandidates: patchCandsSeen/.test(idx), '/api/bili-pond/models 没回 routeCandidates')
 
 // 收尾
-if (oldDir === undefined) delete process.env.DSH_PROFILE_DIR
-else process.env.DSH_PROFILE_DIR = oldDir
+for (const k of Object.keys(envBackup)) {
+  if (envBackup[k] === undefined) delete process.env[k]
+  else process.env[k] = envBackup[k]
+}
 rmSync(dir, { recursive: true, force: true })
 
 if (fail.length) {

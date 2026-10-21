@@ -1580,6 +1580,15 @@ window.__ModuleLoader__.load({
                   ? h('div', { 'data-bd-row-desc': '' },
                       '这几条线路会自动带进值班那一轮（不用另装、也不用改配置）：' + models.reusedRoutes.join('、'))
                   : null,
+                /* ⭐ 没带成的时候说清楚为什么（2026-10-21：Electron 宿主里拿不到 profile 路径，
+                 *    功能静默失效过一次，用户只看到「还是不可以」） */
+                (models && models.reuseRoutes !== false
+                  && (!Array.isArray(models.reusedRoutes) || models.reusedRoutes.length === 0)
+                  && models.routeProbe === 'none')
+                  ? h('div', { 'data-bd-row-desc': '' },
+                      '没能自动沿用你界面里的线路配置（补丁层：' + (models.routePatch || '没找到')
+                      + '）—— 自定义线路想在值班里用，还得装到值班 profile 或手动加配置。')
+                  : null,
                 (models && models.ok === false)
                   ? h('div', { 'data-bd-row-desc': '' }, '无法读取模型列表：' + (models.error || ''))
                   : null,

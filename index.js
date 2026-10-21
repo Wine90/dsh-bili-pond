@@ -1180,13 +1180,34 @@ export function apply(ctx, config) {
   /** 值班那一轮的默认模型由本插件自己写（设置页），宿主的这条不能抄 —— 否则会悄悄改掉用户选的模型 */
   const ROUTE_SKIP_IDS = new Set(['agent-default-model'])
 
-  /** 宿主 profile 的补丁层在哪（Electron 桌面版 / CLI 都给了 DSH_PROFILE_DIR） */
+  /** 宿主 profile 的补丁层在哪。
+   *    ⚠️⚠️ 2026-10-21 实测教训：**Electron 宿主进程里 `DSH_PROFILE_DIR` / `DSH_PROFILE` 是空的**
+   *    （那些 `DSH_*` 变量只注入给工具子进程，插件自己所在的宿主进程没有）⇒
+   *    只认 env 的话这里永远返回空串、整个功能静默失效（用户看到的就是「还是不可以」）。
+   *    ⇒ 多路兜底，最靠得住的是**从插件自己的路径倒推**：
+   *       插件装在 `<profile>/node_modules/dsh-bili-pond` ⇒ 往上两级就是那个 profile 的根。
+   */
+  /** 上一次 hostPatchFile() 试过哪几个位置（设置页排错用） */
+  let patchCandsSeen = []
   const hostPatchFile = () => {
+    const cands = []
+    const add = (p) => { const s = String(p || '').trim(); if (s && !cands.includes(s)) cands.push(s) }
     const dir = String(process.env.DSH_PROFILE_DIR || '').trim()
-    if (dir) return join(dir, 'cordis.patch.yml')
+    /* ⭐ 第一顺位：插件自己的位置倒推 profile 根 —— 这份补丁就是"加载我的那个 profile"的，
+     *    比 env 更可信（env 可能指向别的 profile，或者干脆是空的）。 */
+    add(join(pluginDir, '..', '..', 'cordis.patch.yml'))
+    if (dir) add(join(dir, 'cordis.patch.yml'))
     const home = String(process.env.DSH_HOME || '').trim()
     const prof = String(process.env.DSH_PROFILE || '').trim()
-    if (home && prof) return join(home, 'profiles', prof, 'cordis.patch.yml')
+    if (home && prof) add(join(home, 'profiles', prof, 'cordis.patch.yml'))
+    patchCandsSeen = cands.map((c) => {
+      let exists = false
+      try { exists = existsSync(c) } catch { exists = false }
+      return { file: c, exists }
+    })
+    for (const c of cands) {
+      try { if (existsSync(c)) return c } catch { /* 下一个 */ }
+    }
     return ''
   }
 
@@ -1204,8 +1225,11 @@ export function apply(ctx, config) {
     return blocks
   }
 
+  /** 上一次 routeOverlayYml() 实际带了哪几个 entry（给设置页排错用：空 = 没带成，界面能直接看出来） */
+  let routeIdsSeen = []
   /** 生成「把宿主线路带过去」的那几行 overlay（sync：跑在开跑路径上，不能等 I/O 之外的任何东西） */
   const routeOverlayYml = () => {
+    routeIdsSeen = []
     if (cfg.reuseRoutes === false) return []
     const f = hostPatchFile()
     if (!f) return []
@@ -1225,7 +1249,10 @@ export function apply(ctx, config) {
       taken.push(b.id)
       out.push(body.replace(/\s+$/, ''), '')
     }
-    if (taken.length) log(`值班会带上宿主的线路配置：${taken.join('、')}`)
+    if (taken.length) {
+      routeIdsSeen = taken.slice()
+      log(`值班会带上宿主的线路配置：${taken.join('、')}`)
+    }
     return out
   }
 
@@ -2288,6 +2315,13 @@ export function apply(ctx, config) {
         /* ⭐ 给界面的一句话提示：这些线路是"从你界面那份配置自动带进值班的" */
         reuseRoutes: cfg.reuseRoutes !== false,
         reusedRoutes: inProfile.ok ? (inProfile.declared || []) : [],
+        /* ⭐ 排错用（2026-10-21：Electron 宿主里没有 DSH_PROFILE_DIR，功能静默失效过一次）：
+         *    从哪个文件抄的、抄了哪几个 entry、这次探测用的 overlay 有没有生成。
+         *    界面不一定要显示，但「为什么没带上」看一眼就知道。 */
+        routePatch: hostPatchFile(),
+        routeIds: routeIdsSeen.slice(),
+        routeProbe: probe ? 'overlay' : 'none',
+        routeCandidates: patchCandsSeen,
         providers,
       })
     }

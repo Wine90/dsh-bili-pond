@@ -1480,16 +1480,22 @@ window.__ModuleLoader__.load({
               const curModels = cur ? (cur.models || []) : []
               const provOpts = [h('option', { value: '', key: '__default' }, '跟随 headless 默认（推荐）')]
               for (const x of list) {
-                /* ⭐ 三种状态要分清（2026-10-20）：
+                /* ⭐ 四种状态要分清（2026-10-21）：
                  *    · 已激活（active）          —— 正常可选
                  *    · 声明了但没激活（active:false）—— 线路插件装了但适配器没注册，选它跑不起来，
                  *                                    所以置灰并说明原因，别让用户以为插件没识别到
-                 *    · 值班 profile 里没有（usable === false）—— 那是另一个 profile 的问题，置灰 */
-                const notActive = x.active === false
+                 *    · 值班 profile 里没有（usable === false）—— 那是另一个 profile 的问题，置灰
+                 *    · `source === 'profile'`    —— 只在**值班那个 profile**里注册（比如 headless 只挂了
+                 *                                    workbuddy 连接器）⇒ 桌面进程里当然列不出来，
+                 *                                    但选它是**对的**，所以要可点、且标注清楚 */
+                const onlyProfile = x.source === 'profile'
+                const notActive = x.active === false && !onlyProfile
                 const notInProfile = x.usable === false
-                const suffix = notActive
-                  ? '（未启用：线路插件没激活）'
-                  : (notInProfile ? '（值班 profile 里没装）' : '')
+                const suffix = onlyProfile
+                  ? '（只在值班 profile 里 —— 可用）'
+                  : notActive
+                    ? '（未启用：线路插件没激活）'
+                    : (notInProfile ? '（值班 profile 里没装）' : '')
                 provOpts.push(h('option', {
                   key: x.id,
                   value: x.id,
@@ -1535,10 +1541,26 @@ window.__ModuleLoader__.load({
                 }, provOpts)),
                 /* ⭐ 如果有线路声明了却没激活，直接说清楚为什么 —— 否则用户只会看到
                  *    "我明明装了 workbuddy，这里却没有"（2026-10-20 实测反馈） */
-                (models && Array.isArray(models.providers) && models.providers.some((x) => x.active === false))
+                (models && Array.isArray(models.providers) && models.providers.some((x) => x.active === false && x.source !== 'profile'))
                   ? h('div', { 'data-bd-row-desc': '' },
-                      '有线路装了但没激活（下面标着「未启用」）：去「设置 → 模型/线路」把它启用，或检查它的配置；'
+                      '有线路装了但没激活（标着「未启用」）：去「设置 → 模型/线路」把它启用，或检查它的配置；'
                       + '激活后这里就能直接选。')
+                  : null,
+                /* ⭐ 只在值班 profile 里注册的线路（如 headless 的 workbuddy）：
+                 *    模型列表在**当前进程**里读不到 ⇒ 给一个手填框，填 id 就行（留空=用线路默认）。 */
+                (dutyProv && cur && cur.source === 'profile')
+                  ? h(Row, {
+                      label: '具体模型',
+                      desc: '这条线路只在值班 profile 里注册，模型列表读不到 —— 直接填模型 id（留空 = 用线路默认）',
+                    }, h('input', {
+                      'data-bd-input': '', 'data-bd-w-md': '', type: 'text',
+                      placeholder: '例如 glm-5.3-flash',
+                      value: dutyModel ?? '',
+                      onChange: (e) => {
+                        setDutyModel(e.target.value)
+                        patch({ dutyModel: e.target.value }, '具体模型')
+                      },
+                    }))
                   : null,
                 (dutyProv && curModels.length > 0)
                   ? h(Row, {
@@ -1557,6 +1579,13 @@ window.__ModuleLoader__.load({
                   : null,
                 (models && models.profileError)
                   ? h('div', { 'data-bd-row-desc': '' }, '预检提示：' + models.profileError)
+                  : null,
+                /* ⭐ profile 里有 bundle 没起来（版本不兼容之类）时说人话 ——
+                 *    否则表现就是「我装的线路一动不动」 */
+                (models && Array.isArray(models.warnings) && models.warnings.length > 0)
+                  ? h('div', { 'data-bd-row-desc': '' },
+                      '值班 profile 里有插件没加载：' + models.warnings.join('；')
+                      + '。修好之后它注册的线路才会真正能跑（多数情况是插件版本与当前 dsh 不匹配）。')
                   : null)
             })(),
 

@@ -1617,8 +1617,26 @@ export function apply(ctx, config) {
       t.unref?.()
     })
     if (!out.ok) return out
+    /* ⚠️ 必须**行首锚定**：不锚定的话 `searchProvider:` / `fetchProvider:` 也会被吃进来
+     *    （实测 dump 里 web-fetch 那行就带出了一个叫 http 的假线路）。 */
     const prov = new Set()
-    for (const m of out.text.matchAll(/provider:\s*['"]?([A-Za-z0-9_.-]+)/g)) prov.add(m[1])
+    for (const m of out.text.matchAll(/^[ \t]*provider:[ \t]*['"]?([A-Za-z0-9_.-]+)/gm)) prov.add(m[1])
+    /* ⚠️ 剩下的 `provider:` 也不全是「模型线路」：subagent 那几行写的是 spawn / fork。
+     *    这些 id 真要塞进下拉，用户选了也只会 NO_ADAPTER，属于纯噪音。 */
+    const NOT_A_ROUTE = new Set(['spawn', 'fork', 'http', 'https', 'none', 'auto'])
+    const routes = [...prov].filter((x) => !NOT_A_ROUTE.has(String(x).toLowerCase()))
+    /* ⭐ 有些线路在 profile 里**根本没起来**（插件被版本检查跳过之类），
+     *    这时 dump 里只剩一句 "skipping profile bundle …"，
+     *    不给用户看的话他只会觉得「我明明装了，怎么这里没有」。 */
+    const warnings = []
+    for (const m of out.text.matchAll(/skipping profile bundle\s+"([^"]+)":?\s*Error:\s*([\s\S]{0,260})/g)) {
+      let why = String(m[2]).split('\n')[0].replace(/\s+/g, ' ').trim()
+      // 后面常跟一长串 requirements 清单，界面上一行就够 —— 只留结论那半句
+      const cut = why.indexOf(': requirements')
+      if (cut > 0) why = why.slice(0, cut)
+      else if (why.length > 180) why = why.slice(0, 180) + '…'
+      warnings.push(`${m[1]}：${why}`)
+    }
     const plugins = new Set()
     for (const m of out.text.matchAll(/name:\s*['"]?((?:@[^/]+\/)?[A-Za-z0-9_.-]+)['"]?/g)) {
       const n = String(m[1]).trim()
@@ -1627,7 +1645,7 @@ export function apply(ctx, config) {
         plugins.add(n.replace(/^@[^/]+\//, ''))
       }
     }
-    return { ok: true, providers: [...prov], plugins: [...plugins], text: out.text }
+    return { ok: true, providers: routes, plugins: [...plugins], warnings, text: out.text }
   }
 
   /**
@@ -2111,18 +2129,33 @@ export function apply(ctx, config) {
         const canUse = !inProfile.ok ? null : (usable.has(p.id) || [...usable].some((n) => n.includes(p.id)))
         return {
           ...p,
+          source: 'here',
           usable: canUse,
           // ⭐ 前端用：这条线路只在当前进程有、值班 profile 没有时，给一个「装过去」的包名
           package: PROVIDER_PACKAGES[p.id] || '',
           reason: canUse === false ? 'not-in-profile' : '',
         }
       })
+      /* ⭐⭐ 只装在「值班那个 profile」里的线路（典型：headless 只挂了 workbuddy 连接器，
+       *     它注册的线路叫 `workbuddy`，而桌面进程里根本没这个 provider）。
+       *     以前这些线路在下拉里**完全不存在** ⇒ 用户选不到、也以为插件没识别到 ✗
+       *     现在补进来并标 source: 'profile'：能选，但模型列表读不到（那是另一个进程的事），
+       *     所以「具体模型」在那儿改成可手填。 */
+      if (inProfile.ok) {
+        const seen = new Set(providers.map((p) => p.id))
+        for (const id of (inProfile.providers || [])) {
+          if (!id || seen.has(id)) continue
+          seen.add(id)
+          providers.push({ id, name: id, active: false, error: '', usable: true, source: 'profile', models: [] })
+        }
+      }
       return sendJson(res, 200, {
         ok: true,
         current: { provider: cfg.dutyProvider || '', model: cfg.dutyModel || '' },
         profile: cfg.headlessProfile,
         profileKnown: Boolean(inProfile.ok),
         profileError: inProfile.ok ? '' : (inProfile.error || ''),
+        warnings: inProfile.ok ? (inProfile.warnings || []) : [],
         providers,
       })
     }

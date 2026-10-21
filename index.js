@@ -118,6 +118,11 @@ export const Config = !z ? undefined : z.object({
   headlessProfile: z.string().default('headless').extra('volatile', true),
   /** 给那一轮叠一份插件自己的 patch（把 B站 MCP 挂上）—— 用户 profile 一个字都不用改 */
   overlayMcp: z.boolean().default(true).extra('volatile', true),
+  /**
+   * 把「界面里正在用的模型线路」自动带进值班那一轮（2026-10-21）。
+   * 关掉的话，值班只能用值班 profile 自己装的那几条。
+   */
+  reuseRoutes: z.boolean().default(true).extra('volatile', true),
   /** 跑 headless 时的工作目录 */
   workspace: z.string().default('').extra('volatile', true),
   /** 日报形态：full=完整（现状）· brief=每条一两行 · off=不写报告（只发评论） */
@@ -272,7 +277,7 @@ export function apply(ctx, config) {
     minDurationMin: 0, maxDurationMin: 60, preferSubtitle: true, subtitleProbeMax: 3,
     noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
     dmOn: false, dmMode: 'off', dmUid: 0,
-    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
   }
   const normalize = (src, base) => {
     const out = { ...base }
@@ -1155,6 +1160,89 @@ export function apply(ctx, config) {
     return out
   }
 
+  /* ⭐⭐ 2026-10-21（用户反馈：「别的插件用户也在为这条发愁 —— 需要一个对所有人都好用的办法，
+   *    别靠名字匹配、也别让人一步步手配」）：
+   *    值班跑的是**另一个 profile**，那条 profile 里没有你在界面上配的模型线路 ⇒
+   *    下拉里你常用的线路是灰的，非要去装包 / 改配置才能用 ✗
+   *    ⭐ 做法：DSH 的 profile 是**一层层补丁叠出来的**，`dsh --patch <file>` 是官方给的口子
+   *    （`dsh --help`：`--patch <path>  extra patch-list overlay applied after the profile layer`）。
+   *    所以值班开跑前，把**宿主（你现在用的这个 profile）那份 cordis.patch.yml 里跟模型有关的 entry
+   *    原样抄进 overlay** —— 线路叫什么、有几条、来自哪个插件，全都不用管 ✓
+   *    ⚠️ 只抄「模型相关」的 entry（contains providers:/models:/baseURL:/apiKeyEnv: 之类），
+   *       权限、UI、沙箱策略那些一概不碰（用户 2026-10-21 明确选的这个范围）。
+   *    ⚠️ 抄不到就静默跳过（用户选的是「失败也照旧跑」，不许因为这个小功能把值班卡死）。
+   */
+  /* ⚠️ 认「这条 entry 是不是模型线路配置」只看**线路声明才有的字段**：
+   *    `providers:`（一个插件带多条线路）/ models / baseURL / apiKeyEnv / api …
+   *    ⚠️ 别认单独一个 `provider:` —— `ui-chat`、`agent-default-model` 里也有 `provider: xxx`，
+   *       那是"选哪条"，不是"定义哪条"，抄过去只会把 UI 配置也带进值班（实测踩过）。 */
+  const ROUTE_BLOCK_HINT = /(^|\n)\s*(providers|models|baseURL|base_url|apiBase|apiKeyEnv|apiKey|api|displayName):/m
+  /** 值班那一轮的默认模型由本插件自己写（设置页），宿主的这条不能抄 —— 否则会悄悄改掉用户选的模型 */
+  const ROUTE_SKIP_IDS = new Set(['agent-default-model'])
+
+  /** 宿主 profile 的补丁层在哪（Electron 桌面版 / CLI 都给了 DSH_PROFILE_DIR） */
+  const hostPatchFile = () => {
+    const dir = String(process.env.DSH_PROFILE_DIR || '').trim()
+    if (dir) return join(dir, 'cordis.patch.yml')
+    const home = String(process.env.DSH_HOME || '').trim()
+    const prof = String(process.env.DSH_PROFILE || '').trim()
+    if (home && prof) return join(home, 'profiles', prof, 'cordis.patch.yml')
+    return ''
+  }
+
+  /** 把 patch 文件按顶层 `- id:` 切成一块块（纯文本切，不引 YAML 依赖：我们只需要整块搬运） */
+  const splitPatchBlocks = (text) => {
+    const blocks = []
+    let cur = null
+    for (const line of String(text).replace(/^\uFEFF/, '').split(/\r?\n/)) {
+      const m = /^- id:\s*['"]?([A-Za-z0-9_@/.-]+)/.exec(line)
+      if (m) { cur = { id: m[1], lines: [line] }; blocks.push(cur); continue }
+      if (!cur) continue
+      if (/^\S/.test(line) && line.trim()) { cur = null; continue }   // 顶格又不是 - id: ⇒ 这块结束了
+      cur.lines.push(line)
+    }
+    return blocks
+  }
+
+  /** 生成「把宿主线路带过去」的那几行 overlay（sync：跑在开跑路径上，不能等 I/O 之外的任何东西） */
+  const routeOverlayYml = () => {
+    if (cfg.reuseRoutes === false) return []
+    const f = hostPatchFile()
+    if (!f) return []
+    let text = ''
+    try { text = readFileSync(f, 'utf8') } catch { return [] }
+    if (!text.trim()) return []
+    const out = []
+    const taken = []
+    const seen = new Set()
+    for (const b of splitPatchBlocks(text)) {
+      if (seen.has(b.id)) continue
+      if (ROUTE_SKIP_IDS.has(b.id)) continue
+      const body = b.lines.join('\n')
+      if (/^\s*disabled:\s*true/m.test(body)) continue    // 宿主那边本来就关着，别硬打开
+      if (!ROUTE_BLOCK_HINT.test(body)) continue          // 不是模型相关的那类 entry
+      seen.add(b.id)
+      taken.push(b.id)
+      out.push(body.replace(/\s+$/, ''), '')
+    }
+    if (taken.length) log(`值班会带上宿主的线路配置：${taken.join('、')}`)
+    return out
+  }
+
+  /**
+   * 把「宿主线路」那几行单独写成一个 overlay 文件，给"探测"用（探完就删）。
+   * 返回路径；没有内容就返回空串（调用方照旧跑不带 patch 的探测）。
+   */
+  const writeRouteOverlay = () => {
+    const yml = routeOverlayYml()
+    if (!yml.length) return ''
+    const f = join(stateDir, 'probe-route-overlay.yml')
+    try { writeFileSync(f, yml.join('\n'), 'utf8'); return f } catch (e) {
+      log(`写探测用的 overlay 失败（不影响开跑）：${e?.message ?? e}`)
+      return ''
+    }
+  }
+
   const ensureOverlay = () => {
     const file = join(stateDir, 'headless-overlay.yml')
     const script = join(stateDir, 'mcp_server.py')
@@ -1173,6 +1261,9 @@ export function apply(ctx, config) {
     // ⭐ 模型线路（设置页选的）。空 = 不覆盖，跟随 headless 自己的默认模型。
     const modelYml = modelOverrideYml()
     if (modelYml.length) yml.push(...modelYml, '')
+    // ⭐ 把界面里在用的模型线路一起带过去（见上面 routeOverlayYml 的注释）
+    const routeYml = routeOverlayYml()
+    if (routeYml.length) yml.push(...routeYml)   // 自带结尾空行，不再补
     if (cfg.overlayMcp) {
       yml.push(
         '- insert:',
@@ -1591,13 +1682,18 @@ export function apply(ctx, config) {
    *    做法：跑一次 `dsh --profile <headlessProfile> --dump-config`，从输出里收集 provider 名。
    *    这样就能在"开跑前"拦住 NO_ADAPTER，而不是跑半小时才失败。
    */
-  const modelsInProfile = async (profileName) => {
+  const modelsInProfile = async (profileName, opts = {}) => {
     const dsh = resolveDsh()
     const name = String(profileName || '').trim() || 'headless'
+    const args = [...dsh.args, '--profile', name]
+    /* ⭐ opts.patch：探测「带上宿主线路之后」到底能解析到哪些 —— 值班真的会带那份 overlay，
+     *    不带的话探测结果就是假的（用户看到灰着，其实跑起来是好的）。 */
+    if (opts.patch) args.push('--patch', String(opts.patch))
+    args.push('--dump-config')
     const out = await new Promise((resolve) => {
       let child
       try {
-        child = spawn(dsh.command, [...dsh.args, '--profile', name, '--dump-config'], {
+        child = spawn(dsh.command, args, {
           cwd: stateDir, shell: dsh.shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
           env: pyEnv(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         })
@@ -1625,6 +1721,27 @@ export function apply(ctx, config) {
      *    这些 id 真要塞进下拉，用户选了也只会 NO_ADAPTER，属于纯噪音。 */
     const NOT_A_ROUTE = new Set(['spawn', 'fork', 'http', 'https', 'none', 'auto'])
     const routes = [...prov].filter((x) => !NOT_A_ROUTE.has(String(x).toLowerCase()))
+    /* ⭐⭐ pi-ai 这类「一个插件带多条线路」的配置：线路名是 `providers:` 下面的**映射键**，
+     *    并不是 `provider:` 字段 ⇒ 上面那套正则完全看不见它们（WorkBuddy 本地反代就是这样丢的）。
+     *    只认 `providers:` 下一层（缩进正好 +2）的键，免得把 models: / caps: 也当成线路。 */
+    const declared = new Set()
+    {
+      const lines = out.text.split(/\r?\n/)
+      for (let i = 0; i < lines.length; i++) {
+        const head = /^(\s*)providers:\s*$/.exec(lines[i])
+        if (!head) continue
+        const base = head[1].length
+        for (let j = i + 1; j < lines.length; j++) {
+          const l = lines[j]
+          if (!l.trim()) continue
+          const ind = /^\s*/.exec(l)[0].length
+          if (ind <= base) break
+          if (ind !== base + 2) continue
+          const m = /^\s*['"]?([A-Za-z0-9_@.-]+)['"]?:\s*$/.exec(l)
+          if (m) declared.add(m[1])
+        }
+      }
+    }
     /* ⭐ 有些线路在 profile 里**根本没起来**（插件被版本检查跳过之类），
      *    这时 dump 里只剩一句 "skipping profile bundle …"，
      *    不给用户看的话他只会觉得「我明明装了，怎么这里没有」。 */
@@ -1645,7 +1762,7 @@ export function apply(ctx, config) {
         plugins.add(n.replace(/^@[^/]+\//, ''))
       }
     }
-    return { ok: true, providers: routes, plugins: [...plugins], warnings, text: out.text }
+    return { ok: true, providers: routes, declared: [...declared], plugins: [...plugins], warnings, text: out.text }
   }
 
   /**
@@ -1656,12 +1773,18 @@ export function apply(ctx, config) {
   const checkDutyModel = async () => {
     const prov = String(cfg.dutyProvider || '').trim()
     if (!prov) return { ok: true }
-    const r = await modelsInProfile(cfg.headlessProfile)
+    /* ⭐ 校验要看「带上宿主线路之后」的样子：值班真的会带那份 overlay（routeOverlayYml），
+     *    不带给它的话，用户明明能用却被告知「这个 profile 里没有这条线路」 */
+    const probe = writeRouteOverlay()
+    let r
+    try { r = await modelsInProfile(cfg.headlessProfile, probe ? { patch: probe } : {}) }
+    finally { if (probe) { try { rmSync(probe, { force: true }) } catch { /* 删不掉也无所谓 */ } } }
     if (!r.ok) return { ok: true, unchecked: true, why: r.error }
     const hit = (r.providers || []).includes(prov)
+      || (r.declared || []).includes(prov)
       || (r.plugins || []).some((n) => n === prov || n.includes(prov))
     if (!hit) {
-      const known = [...new Set([...(r.providers || []), ...(r.plugins || [])])].slice(0, 20)
+      const known = [...new Set([...(r.providers || []), ...(r.declared || []), ...(r.plugins || [])])].slice(0, 20)
       return {
         ok: false,
         error: `「${cfg.headlessProfile}」这个 profile 里没有可用线路「${prov}」—— `
@@ -2119,9 +2242,15 @@ export function apply(ctx, config) {
     // ⭐ 「值班用哪个模型」下拉的数据源：当前进程真实注册的线路 + 模型（不写死）
     if (req.method === 'GET' && path === '/api/bili-pond/models') {
       const here = await modelsHere()
-      const inProfile = await modelsInProfile(cfg.headlessProfile)
+      /* ⭐ 探测必须**带上值班真会带的那份 overlay**，否则从这里看到的「能不能用」是假象：
+       *    界面上线路灰着，可值班跑起来其实是好的（用户 2026-10-21 就是被这个吓过）。 */
+      const probe = writeRouteOverlay()
+      let inProfile
+      try { inProfile = await modelsInProfile(cfg.headlessProfile, probe ? { patch: probe } : {}) }
+      finally { if (probe) { try { rmSync(probe, { force: true }) } catch { /* 无妨 */ } } }
       const usable = new Set([
         ...((inProfile.providers) || []),
+        ...((inProfile.declared) || []),
         ...((inProfile.plugins) || []),
       ])
       const providers = (here.providers || []).map((p) => {
@@ -2143,7 +2272,7 @@ export function apply(ctx, config) {
        *     所以「具体模型」在那儿改成可手填。 */
       if (inProfile.ok) {
         const seen = new Set(providers.map((p) => p.id))
-        for (const id of (inProfile.providers || [])) {
+        for (const id of [...(inProfile.providers || []), ...(inProfile.declared || [])]) {
           if (!id || seen.has(id)) continue
           seen.add(id)
           providers.push({ id, name: id, active: false, error: '', usable: true, source: 'profile', models: [] })
@@ -2156,6 +2285,9 @@ export function apply(ctx, config) {
         profileKnown: Boolean(inProfile.ok),
         profileError: inProfile.ok ? '' : (inProfile.error || ''),
         warnings: inProfile.ok ? (inProfile.warnings || []) : [],
+        /* ⭐ 给界面的一句话提示：这些线路是"从你界面那份配置自动带进值班的" */
+        reuseRoutes: cfg.reuseRoutes !== false,
+        reusedRoutes: inProfile.ok ? (inProfile.declared || []) : [],
         providers,
       })
     }

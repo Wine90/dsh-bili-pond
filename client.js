@@ -1574,6 +1574,12 @@ window.__ModuleLoader__.load({
                       },
                     }, modelOpts))
                   : null,
+                /* ⭐ 2026-10-21：这几条线路是**从你界面那份配置自动带进值班的**（--patch overlay），
+                 *    说一句，否则用户不知道自己明明没在值班 profile 里装，为什么就能选了。 */
+                (models && models.reuseRoutes !== false && Array.isArray(models.reusedRoutes) && models.reusedRoutes.length > 0)
+                  ? h('div', { 'data-bd-row-desc': '' },
+                      '这几条线路会自动带进值班那一轮（不用另装、也不用改配置）：' + models.reusedRoutes.join('、'))
+                  : null,
                 (models && models.ok === false)
                   ? h('div', { 'data-bd-row-desc': '' }, '无法读取模型列表：' + (models.error || ''))
                   : null,

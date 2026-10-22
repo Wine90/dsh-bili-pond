@@ -89,8 +89,8 @@ ok(/const cwdDir = runDir\(\)/.test(src) && /cwd: cwdDir/.test(src),
 const dmAskSrc = (src.slice(src.indexOf('const dmAsk ='), src.indexOf('const dmTick')) || '')
 ok(dmAskSrc.length > 0 && !/cwd: stateDir/.test(dmAskSrc),
   'dmAsk 里绝不能拿 stateDir 当 cwd：那儿有 duty.md / out 报告，模型会去翻然后自己编')
-ok(/return \['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info', 'bili_user_videos', 'bili_guard_scan'\]/.test(src),
-  '私信轮要能取字幕/简介/搜索/守护数据（用户 2026-10-22：私信是跟 AI 聊天，不是查询命令）')
+ok(/return \['bili_search',[\s\S]{0,400}?'bili_setting_set'\]/.test(src),
+  '私信轮要能取字幕/简介/搜索/守护数据 + 读/改设置（用户 2026-10-22：私信 = 聊天入口，A 档设置可远程改）')
 
 console.log('=== MCP 侧 ===')
 ok(/async def bili_dm_inbox\(uid: int = 0, limit: int = 20\)/.test(py), 'mcp_server.py 应有 bili_dm_inbox')
@@ -142,6 +142,23 @@ ok(/patch\(\{ dmCtlOn: v \}, '私信遥控'\)/.test(client), '开关要能存回
 ok(/patch\(\{ dmCtlPrefix: v \}, '命令前缀'\)/.test(client), '前缀要能存回去')
 ok(/像微信聊天/.test(src), '提示词要按聊天写（用户 2026-10-22 澄清：私信 = 对话入口）')
 
+console.log('=== 两条固定会话（用户 2026-10-22：装完自动建两条，误删重启自动重建）===')
+ok(/const createSession = \(titleLine, bodyLine, why\) =>/.test(src), '应有 createSession 助手')
+ok(/const ensureFixedSessions = async \(\) =>/.test(src), '应有 ensureFixedSessions')
+ok(/B站值守 · 误删重启自动重建/.test(src), '值守那条会话的标题')
+ok(/B站私信 · 误删重启自动重建/.test(src), '私信那条会话的标题')
+ok(/if \(dutySess && !sawSession\)/.test(src), '值守会话被删了要自愈（清 id，下轮重建）')
+ok(/if \(!sid\) \{[\s\S]{0,500}?s\.sessionId = ''/.test(src), '私信会话被删了要自愈')
+ok(/ensureFixedSessions\(\)\.catch/.test(src), '插件加载后要自动建一次')
+ok(/if \(flag\.done\) return/.test(src), '建过就不要重复建')
+
+console.log('=== 私信改设置（A 档，用户 2026-10-22 拍板）===')
+ok(/def bili_setting_get\(/.test(py), 'mcp_server.py 应有 bili_setting_get')
+ok(/def bili_setting_set\(key: str, value: str, confirm: bool = False\)/.test(py), 'bili_setting_set 的签名')
+ok(/_SETTING_SPEC\s*=/.test(py), '要有「能改哪些」的白名单表')
+ok(/need_confirm/.test(py), '会花钱 / 对外说话的项要二次确认')
+ok(/200 字以内/.test(src), '私信回复要压到 200 字以内')
+ok(/不要写 http 链接/.test(src), '私信正文不许带链接（B站 会静默吞掉）')
 if (fails) {
   console.error(`\n❌ 私信遥控校验失败：${fails}/${n} 条`)
   process.exit(1)

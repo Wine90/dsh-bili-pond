@@ -1220,7 +1220,10 @@ export function apply(ctx, config) {
        *    所以把 B站 的**读**能力全开给它：他发个视频链接过来，它得自己取字幕/简介再看。
        *    🚫 依然不给写工具：bili_reply / bili_send_message / 上传 / 登录 —— 回信由宿主发，
        *       免得它自己又发一遍，也免得一句「帮我回一下」就公开说话。 */
-      return ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info', 'bili_user_videos', 'bili_guard_scan']
+      return ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info', 'bili_user_videos', 'bili_guard_scan',
+        /* ⭐ 私信里也能改设置（用户 2026-10-22：A 档那几项）——只给「读设置 / 改一个设置」两只，
+         *    收件人、路径、白名单、凭证都不在那张表里，所以改不了 ✓ */
+        'bili_setting_get', 'bili_setting_set']
     }
     /* ⭐ 值班轮跑在**工作区**里（2026-10-22 用户：「都搬进工作区哇，不然都要打开插件才能看到」），
      *    而那一轮的沙箱只让写 cwd（workspace-write）⇒ 它写不了插件家目录里的
@@ -1604,6 +1607,7 @@ export function apply(ctx, config) {
      *    写不进去就丢：这里是 stream 回调，抛一次就把整个宿主带走。 */
     try { writeFileSync(runLogFile, '', 'utf8') } catch { /* 清不掉也无所谓，继续追加 */ }
     let pickBuf = ''   // stdout 是按块来的，事件行可能被切断 ⇒ 先攒着，按 \n 切
+    let sawSession = false
     const pick = (buf) => {
       const s = String(buf)
       try { appendFileSync(runLogFile, s, 'utf8') } catch { /* 绝不能抛 */ }
@@ -1618,6 +1622,9 @@ export function apply(ctx, config) {
           if (!t.startsWith('{')) continue
           try {
             const ev = JSON.parse(t)
+            if (ev && ev.type === 'session' && ev.sessionId) {
+              sawSession = true
+            }
             if (ev && ev.type === 'session' && ev.sessionId && String(ev.sessionId) !== dutySess) {
               dutySess = String(ev.sessionId)
               try { writeJson(dutySessFile, { sessionId: dutySess, cwd, at: new Date().toISOString() }) } catch { /* 记不下来就下一轮再说 */ }
@@ -1634,6 +1641,11 @@ export function apply(ctx, config) {
     child.on('exit', (code) => {
       const tookSec = Math.round((Date.now() - startedMs) / 1000)
       dutyRun = null
+      /* ⭐ 误删自愈（用户 2026-10-22：「误删了重启会自动创建」）：带 --session-id 跑完却一个
+       *    session 事件都没拿到 ⇒ 那条会话被删了 ⇒ 把 id 清掉，下一轮自动新建一条。 */
+      if (dutySess && !sawSession) {
+        try { rmSync(dutySessFile, { force: true }); log('值守那条会话不见了（可能被删了），下一轮自动重建') } catch { /* 删不掉也无妨 */ }
+      }
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
       /* ⭐ 守护：这一轮的待回复清单用完就删 —— 留着的话下一轮会把同一批再塞进提示词，
        *    模型就会重复回同一批人（seen 表只挡"再扫出来"，挡不住"清单还在"） */
@@ -2260,6 +2272,8 @@ export function apply(ctx, config) {
    *      ④ 每日条数上限 ⑤ 只处理 24 小时内的消息（第一次打开不会把历史私信全执行一遍）
    */
   const dmStateFile = join(stateDir, 'dm-state.json')
+  /* ⭐ 值班那条固定会话的 id（2026-10-22 用户：值班轮也进同一条对话，不然没有上下文） */
+  const dutySessFile = join(stateDir, 'duty-session.json')
   const dmCfg = () => {
     const owner = Number(cfg.mentionUid) || 0
     return {
@@ -2421,8 +2435,27 @@ export function apply(ctx, config) {
         + (context ? `\n我手头知道的（宿主查好的，能直接用，不够也能自己再查）：\n${context}\n` : '')
         + `\n他可能发视频链接 / BV 号，或者让我分析某个视频、找点东西、结合我这边的情况回答。\n`
         + `需要的话我自己调工具去取（字幕、简介、评论、搜索都能用），**别凭空编视频里没有的内容**。\n`
-        + `回他的时候：像微信聊天，一两句到一小段都行，不要标题/列表/markdown 符号，别 @ 人，400 字以内。\n`
-        + `只把要回的话写出来，**别自己发私信**（发不发、发给谁由宿主决定）。`)
+        + `回他的时候：像微信聊天，一两句到一小段都行，不要标题/列表/markdown 符号，别 @ 人，**200 字以内**。\n`
+        /* ⭐ 2026-10-22 用户实测：带链接的长私信会被 B站 静默吞掉（接口回 success，会话里没有）⇒
+         *    正文里**不写 http 链接**，要指视频就写 BV 号（够短、也不触发外链风控）。 */
+        + `⚠️ 正文里**不要写 http 链接**（B站 会把带外链的私信静默吞掉）—— 要指某个视频就写 BV 号，例如 BV1NJn665Epm。\n`
+        + `只把要回的话写出来，**别自己发私信**（发不发、发给谁由宿主决定）。\n`
+        + `\n如果他是要我改设置：用 \`bili_setting_get\` 先看现在是什么值，再用 \`bili_setting_set(key, value)\` 改。\n`
+        + `能改的只有这些（不在表里的一律回「这个得在设置页改」）：\n`
+        + `  开关：guardOn（守护评论区）、guardOwnAll（我视频下不用 @ 也回）、guardEmoji（回复带表情）、\n`
+        + `        autoRun（自动跑）、peakValleyOnly（只在低谷跑）、noon / night（中午 / 夜间跑）、\n`
+        + `        transcribe（本地转写）、preferSubtitle（优先字幕）、autoComment（发公开评论）、\n`
+        + `        replyToComments（回复评论）、dmOn（值班轮发私信）\n`
+        + `  数字：guardDailyCap（守护每天最多几条，0-500）、guardPerRound（每轮几条，1-20）、\n`
+        + `        guardScope（守最近几条视频，1-10）、guardPollMinutes（几分钟扫一次，1-240）、\n`
+        + `        autoRunsPerDay（一天自动跑几次，0-48）、autoGapMinutes（间隔分钟，5-1440）、\n`
+        + `        perRoundMax / perDayMax（每轮 / 每天挑几条）、minDurationMin / maxDurationMin（时长下限/上限分钟）、\n`
+        + `        transcribePerDay（每天转写几条）\n`
+        + `  文本：keywords（关键词，逗号分隔）、reportLevel（full / brief）、asrModel（tiny/base/small/medium/large）\n`
+        + `  ⚠️ autoRun / autoComment / replyToComments / dmOn 这几项会「开始定时花钱」或「对外说话」：\n`
+        + `     第一次调用会返回 need_confirm=true，**必须先用一句话问他确认**，他同意了再带 confirm=true 调一次。\n`
+        + `  ⚠️ 收件人、目录、白名单、凭证**改不了**（不在表里），别答应他。\n`
+        + `  改完回一句人话，例如「好了，守护每天最多 10 条了」。`)
       /* ⚠️ 2026-10-22 实测：cwd 必须是**空目录**。放在 stateDir 里，模型会去翻 duty.md / out/ 报告 /
        *    config.json，然后自己编一段「今天干了什么」的回答（实测它甚至声称「已回复主人私信」）。
        *    空目录里它没东西可翻，就老老实实按上面给的数据回话。 */
@@ -2472,6 +2505,15 @@ export function apply(ctx, config) {
         if (timer) clearTimeout(timer)
         if (acc.trim()) onLine(acc)
         if (sid) { try { const s = readDm(); s.sessionId = sid; saveDm(s) } catch { /* 记不住就算了 */ } }
+        /* ⭐ 误删自愈（用户 2026-10-22：「误删了重启会自动创建」）：
+         *    带 --session-id 却一个 session 事件都没拿到 ⇒ 那条会话没了（被删了/换了目录）
+         *    ⇒ 把 id 清掉，下一轮自动新建一条。 */
+        if (!sid) {
+          try {
+            const s = readDm()
+            if (s.sessionId) { s.sessionId = ''; saveDm(s); log('私信那条会话不见了（可能被删了），下一轮自动重建') }
+          } catch { /* 清不掉也无妨 */ }
+        }
         const text = String(finalText || '').trim()
         if (!text) {
           /* ⭐ 没拿到答复必须留下证据（2026-10-22：用户只看到一句「这条还不认识」，日志里什么都没有） */
@@ -2488,6 +2530,82 @@ export function apply(ctx, config) {
 
   let dmBusy = false
   let dmLastAt = 0
+  /* ⭐ 两条固定会话（用户 2026-10-22：「装完插件自动创建两个对话，名字就是 B站私信和 B站值守，
+   *    标题后面写上误删 —— 如果不小心删除了，重启会自动创建」）。
+   *    会话标题取**第一条消息**，所以创建时就把标题当首行发出去；之后所有轮次都续这一条。
+   *    误删自愈：runDuty / dmAsk 带着 --session-id 却拿不到 session 事件 ⇒ 清掉 id，下一轮重建。 */
+  const createSession = (titleLine, bodyLine, why) => new Promise((resolve) => {
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(String(v || '')) } }
+    try {
+      const dsh = resolveDsh()
+      const overlay = ensureOverlay(why)
+      const args = [...dsh.args, '--profile', cfg.headlessProfile || 'headless']
+      if (overlay) args.push('--patch', overlay)
+      args.push('--json')
+      args.push(`${titleLine}\n\n${bodyLine}\n\n收到就回两个字：好的。`)
+      const child = spawn(dsh.command, args, {
+        cwd: runDir(), shell: dsh.shell, windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: pyEnv({ BILI_DUTY_HOME: stateDir, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }),
+      })
+      let acc = ''
+      let sid = ''
+      const eat = (line) => {
+        const s = String(line || '').trim()
+        if (!s) return
+        try { const ev = JSON.parse(s); if (ev?.type === 'session' && ev.sessionId) sid = String(ev.sessionId) } catch { /* 半行就跳过 */ }
+      }
+      const timer = setTimeout(() => { try { child.kill() } catch { /* 无妨 */ } ; finish(sid) }, 180_000)
+      timer.unref?.()
+      child.stdout?.on('data', (b) => {
+        acc += String(b)
+        const lines = acc.split('\n')
+        acc = lines.pop() ?? ''
+        for (const l of lines) eat(l)
+      })
+      child.stderr?.on('data', () => { /* 只为不让管道堵住 */ })
+      child.on('error', () => { clearTimeout(timer); finish('') })
+      child.on('exit', () => { clearTimeout(timer); eat(acc); finish(sid) })
+    } catch (e) {
+      log(`建固定会话失败：${e?.message ?? e}`)
+      finish('')
+    }
+  })
+
+  /* 只在「第一次」建（fixed-sessions.json 打标记）；之后靠上面的自愈补。 */
+  const ensureFixedSessions = async () => {
+    try {
+      const flagFile = join(stateDir, 'fixed-sessions.json')
+      const flag = readJson(flagFile, {})
+      if (flag.done) return
+      const dir = runDir()
+      let okAll = true
+      const duty = readJson(dutySessFile, {})
+      if (!duty.sessionId) {
+        const sid = await createSession('B站值守 · 误删重启自动重建', '这条对话用来记每一轮定时值班：挑了哪些视频、写了什么报告。', 'window')
+        if (sid) {
+          writeJson(dutySessFile, { sessionId: sid, cwd: dir, at: new Date().toISOString() })
+          log('已建好「B站值守」那条固定会话')
+        } else okAll = false
+      }
+      const dm = readDm()
+      if (!dm.sessionId) {
+        const sid = await createSession('B站私信 · 误删重启自动重建', '这条对话用来记你在手机上给 B站 小号发的私信。', 'dm')
+        if (sid) {
+          const s = readDm()
+          s.sessionId = sid
+          s.cwd = dir
+          saveDm(s)
+          log('已建好「B站私信」那条固定会话')
+        } else okAll = false
+      }
+      if (okAll) writeJson(flagFile, { done: true, at: new Date().toISOString() })
+    } catch (e) {
+      log(`建固定会话失败（不影响使用）：${e?.message ?? e}`)
+    }
+  }
+
   /* ⭐ 自适应节奏（用户 2026-10-22 选）：B站 没给第三方留私信推送，只能轮询。
    *    闲时按设置（默认 5 分钟）拉；一旦扫到过消息，接下来 10 分钟改成 20 秒一拉
    *    —— 聊天时几乎即时，闲时又不白拉（每小时 12 次 vs 180 次）。
@@ -2597,6 +2715,14 @@ export function apply(ctx, config) {
     dt.unref?.()
     ctx.effect(() => () => clearInterval(dt), 'bili-pond: 私信遥控定时器')
   } catch (e) { log(`私信遥控定时器没起来：${e?.message ?? e}`) }
+
+  /* ⭐ 两条固定会话：插件加载 20 秒后建一次（错开启动那阵忙；建完打标记，之后不再重复）。
+   *    用户 2026-10-22：「安装完插件自动创建两个对话」。 */
+  try {
+    const st0 = setTimeout(() => { ensureFixedSessions().catch((e) => log(`建固定会话异常：${e?.message ?? e}`)) }, 20_000)
+    st0.unref?.()
+    ctx.effect(() => () => clearTimeout(st0), 'bili-pond: 建固定会话')
+  } catch (e) { log(`建固定会话的定时器没起来：${e?.message ?? e}`) }
 
   /* ─────────────── HTTP（设置页用） ─────────────── */
 

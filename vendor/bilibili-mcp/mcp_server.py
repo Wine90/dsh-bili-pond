@@ -1500,6 +1500,160 @@ async def bili_archive_append(lines: str) -> str:
 
 # ========== Tool 22.5: 读私信（私信遥控通道，2026-10-22）==========
 
+# ========== 设置：私信里能改的那几个（A 档） ==========
+#    为什么放在 MCP 而不是宿主：私信那一轮里，**模型**才是听懂人话的那一环 ——
+#    它把「每天最多回 10 条」映射成 guardDailyCap=10，这里只负责**校验 + 落盘**。
+#    ⚠️ 白名单写死在这张表里：不在表里的 key 一律拒绝。
+#       收件人（mentionUid/dmUid）、路径（workspace/dutyCwd/headlessProfile）、
+#       凭证、白名单（guardWhitelist）**永远改不了** —— 那些改错了会发错人 / 直接坏。
+#    ⚠️ 写的是 `$DSH_HOME/bili-duty/config.json`（= BILI_DUTY_HOME/config.json），
+#       宿主每轮 refreshCfg() 会重新读 ⇒ **下一轮生效**，不需要重启。
+
+_SETTING_SPEC = {
+    # 布尔
+    "guardOn": ("bool", None, None),
+    "guardOwnAll": ("bool", None, None),
+    "guardEmoji": ("bool", None, None),
+    "autoRun": ("bool", None, None),
+    "peakValleyOnly": ("bool", None, None),
+    "noon": ("bool", None, None),
+    "night": ("bool", None, None),
+    "transcribe": ("bool", None, None),
+    "preferSubtitle": ("bool", None, None),
+    "autoComment": ("bool", None, None),
+    "replyToComments": ("bool", None, None),
+    "dmOn": ("bool", None, None),
+    # 整数（带范围）
+    "guardDailyCap": ("int", 0, 500),
+    "guardPerRound": ("int", 1, 20),
+    "guardScope": ("int", 1, 10),
+    "guardPollMinutes": ("int", 1, 240),
+    "autoRunsPerDay": ("int", 0, 48),
+    "autoGapMinutes": ("int", 5, 1440),
+    "perRoundMax": ("int", 0, 20),
+    "perDayMax": ("int", 0, 100),
+    "minDurationMin": ("int", 0, 240),
+    "maxDurationMin": ("int", 0, 240),
+    "transcribePerDay": ("int", 0, 100),
+    # 文本
+    "keywords": ("csv", None, None),      # 逗号/空格分隔
+    "reportLevel": ("enum", None, None),  # full / brief
+    "asrModel": ("enum", None, None),     # tiny/base/small/medium/large
+}
+
+_SETTING_ENUMS = {
+    "reportLevel": ["full", "brief"],
+    "asrModel": ["tiny", "base", "small", "medium", "large"],
+}
+
+# 这几项会「对外说话」或「开始定时花钱」⇒ 必须**再问一句**才写（防它把「关掉」听成「打开」）
+_SETTING_CONFIRM = {
+    "autoRun", "autoRunsPerDay", "autoGapMinutes", "peakValleyOnly", "noon", "night",
+    "autoComment", "replyToComments", "dmOn",
+}
+
+_TRUE = {"1", "true", "yes", "on", "y", "t", "开", "打开", "是", "启用", "开启"}
+_FALSE = {"0", "false", "no", "off", "n", "f", "关", "关闭", "否", "停用", "禁用"}
+
+
+def _setting_file() -> Path:
+    return _DUTY_HOME / "config.json"
+
+
+def _setting_load() -> dict:
+    try:
+        with open(_setting_file(), "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def _setting_save(cfg: dict) -> dict:
+    f = _setting_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(cfg, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, f)
+        return {"ok": True, "file": str(f)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@tool()
+async def bili_setting_get() -> str:
+    """看现在这几个设置是什么值（私信里改设置前先看一眼，别凭记忆）。"""
+    cfg = _setting_load()
+    out = {}
+    for k in _SETTING_SPEC:
+        out[k] = cfg.get(k)
+    return json.dumps({"ok": True, "settings": out}, ensure_ascii=False)
+
+
+@tool()
+async def bili_setting_set(key: str, value: str, confirm: bool = False) -> str:
+    """改一个设置。key 必须是白名单里的（见帮助）；value 传字符串。
+
+    改「会自动跑 / 会对外说话」的那几项（autoRun、autoComment、replyToComments、dmOn…）时，
+    第一次调用会返回 need_confirm=true —— 必须**先问使用者**，他同意了再带 confirm=true 调一次。
+    """
+    k = str(key or "").strip()
+    if k not in _SETTING_SPEC:
+        return json.dumps({
+            "ok": False,
+            "error": f"这个设置不能从私信里改：{k}",
+            "allowed": sorted(_SETTING_SPEC.keys()),
+        }, ensure_ascii=False)
+    kind, lo, hi = _SETTING_SPEC[k]
+    raw = str(value if value is not None else "").strip()
+    try:
+        if kind == "bool":
+            low = raw.lower()
+            if low in _TRUE:
+                val = True
+            elif low in _FALSE:
+                val = False
+            else:
+                return json.dumps({"ok": False, "error": f"{k} 只接受开/关，收到「{raw}」"}, ensure_ascii=False)
+        elif kind == "int":
+            val = int(float(raw))
+            if lo is not None and val < lo:
+                return json.dumps({"ok": False, "error": f"{k} 不能小于 {lo}"}, ensure_ascii=False)
+            if hi is not None and val > hi:
+                return json.dumps({"ok": False, "error": f"{k} 不能大于 {hi}"}, ensure_ascii=False)
+        elif kind == "csv":
+            parts = [p for p in re.split(r"[,，\s]+", raw) if p]
+            val = parts
+        elif kind == "enum":
+            allowed = _SETTING_ENUMS.get(k, [])
+            low = raw.lower()
+            if low not in allowed:
+                return json.dumps({"ok": False, "error": f"{k} 只能是 {'/'.join(allowed)}"}, ensure_ascii=False)
+            val = low
+        else:
+            val = raw
+    except Exception:
+        return json.dumps({"ok": False, "error": f"{k} 的值看不懂：「{raw}」"}, ensure_ascii=False)
+
+    if k in _SETTING_CONFIRM and not confirm:
+        return json.dumps({
+            "ok": False, "need_confirm": True, "key": k, "to": val,
+            "hint": f"这一项会影响「自动跑/对外说话」，先跟使用者确认一句，他同意后再带 confirm=true 调一次",
+        }, ensure_ascii=False)
+
+    cfg = _setting_load()
+    old = cfg.get(k)
+    cfg[k] = val
+    r = _setting_save(cfg)
+    if not r.get("ok"):
+        return json.dumps(r, ensure_ascii=False)
+    return json.dumps({"ok": True, "key": k, "from": old, "to": val, "note": "下一轮生效"}, ensure_ascii=False)
+
+
 @tool()
 async def bili_dm_inbox(uid: int = 0, limit: int = 20) -> str:
     """

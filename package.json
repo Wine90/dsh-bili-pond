@@ -78,7 +78,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "check": "node --import ./tools/register.mjs selfcheck.mjs && node tools/_check-1016.mjs && node tools/test-migrate.mjs && node tools/test-comment-cap.mjs && node tools/test-reuse-routes.mjs && node tools/test-guard.mjs && node tools/test-duty-workspace.mjs",
+    "check": "node --import ./tools/register.mjs selfcheck.mjs && node tools/_check-1016.mjs && node tools/test-migrate.mjs && node tools/test-comment-cap.mjs && node tools/test-reuse-routes.mjs && node tools/test-guard.mjs && node tools/test-guard-watermark.mjs && node tools/test-duty-workspace.mjs",
     "prepublishOnly": "npm run check"
   },
   "author": {

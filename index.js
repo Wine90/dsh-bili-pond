@@ -152,7 +152,6 @@ export const Config = !z ? undefined : z.object({
   /** 跑 headless 时的工作目录 */
   workspace: z.string().default('').extra('volatile', true),
   /** 值班/私信轮**跑在哪个目录**（会话按 cwd 分桶，想让会话出现在你日常那个工作区的列表里就填它；留空 = 用工作区） */
-  dutyCwd: z.string().default('').extra('volatile', true),
   /** 日报形态：full=完整（现状）· brief=每条一两行 · off=不写报告（只发评论） */
   reportLevel: z.string().default('full').extra('volatile', true),
   /** 回复评论：默认关。开了之后只回「直接回复到它那条评论下面的人」 */
@@ -305,7 +304,7 @@ export function apply(ctx, config) {
     minDurationMin: 0, maxDurationMin: 60, preferSubtitle: true, subtitleProbeMax: 3,
     noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
     dmOn: false, dmMode: 'off', dmUid: 0,
-    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', dutyCwd: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
     guardOn: false, guardWhitelist: '', guardOwnAll: true, guardDailyCap: 30, guardScope: 1, guardPerRound: 3, guardPollMinutes: 3, guardEmoji: true, guardTone: '',
   }
   const normalize = (src, base) => {
@@ -1134,12 +1133,12 @@ export function apply(ctx, config) {
           : '**开着、但依赖没装好** ⇒ 这一轮没字幕的视频只能跳过')
         : '关着（没字幕的视频就跳过）'}；`
       + `⭐ 不管哪种情况，**报告里都要写一行「因无字幕跳过 N 条」**（N=0 也写）—— 别让它悄悄少几条。`
-      /* ⭐ 2026-10-22：这一轮跑在**工作区**里（会话才会出现在你的会话列表），
-       *    而工作区的沙箱只让写 cwd ⇒ 报告 / 判重表 / 归档都写不进去。
-       *    所以这三样改用 MCP 工具交（子进程代写，落在插件家目录里）。 */
+      /* ⭐ 2026-10-22 用户定：「对话不要进工作区记录」⇒ 值班轮跑回**插件家**（stateDir）。
+       *    这样会话落在 `%DSH_HOME%/sessions/--…bili-duty--` 桶里，不混进他的工作区列表。
+       *    交作业仍然走三只 MCP 工具（写的就是这个家目录），比让它自己拼路径稳。 */
       + `\n\n===== 这一轮怎么交作业（重要）=====\n`
-      + `这一轮的工作目录是**工作区**，你**写不了**插件数据目录（` + stateDir + `）—— 别用写文件工具去试，会报 sandbox 拒绝。\n`
-      + `改用这三只工具（宿主提供，落在插件家目录里）：\n`
+      + `这一轮的工作目录就是插件数据目录（` + stateDir + `），out/ 和 seen.md 都在这儿。\n`
+      + `交作业请用这三只工具（宿主提供，路径由它们管，别自己拼）：\n`
       + `① 报告：\`bili_report_save(markdown)\` —— 整份报告正文一次交给它（覆盖写 out/<今天>.md）。\n`
       + `② 判重表：\`bili_seen_read()\` 读、\`bili_seen_append(lines)\` 追加（一行一条）。\n`
       + `③ 归档：\`bili_archive_append(lines)\` 追加（一行一条：日期 · BV · 标题 · UP · 一句话结论 · 链接）。\n`
@@ -1501,21 +1500,6 @@ export function apply(ctx, config) {
     return null
   }
 
-  /**
-   * ⭐ 「值班/私信轮跑在哪个目录」（2026-10-22 用户：「不能直接显示吗？我工作区列表没有这个」）
-   *    会话是按 cwd 分桶的（`%DSH_HOME%/sessions/--D-harness--`），跑在哪个目录，会话就出现在
-   *    哪个工作区的列表里。他不想为了看会话去切工作区 ⇒ 单独给一个「跑在哪个目录」：
-   *      ① 填了且存在 → 用它 ② 没填 → 用「工作区」 ③ 都没有 → 插件家（stateDir）
-   *    ⚠️ 人设（AGENTS.md）仍然只从「工作区」读，跟跑在哪无关 —— 这两件事别再绑一起。
-   */
-  const runDir = () => {
-    const c = String(cfg.dutyCwd || '').trim()
-    if (c && existsSync(c)) return c
-    const w = String(cfg.workspace || '').trim()
-    if (w && existsSync(w)) return w
-    return stateDir
-  }
-
   const runDuty = (why = 'window') => {
    try {
     /* ⭐ 同一时间只允许一轮（2026-10-20）：按钮灰掉只是防手滑，
@@ -1546,15 +1530,10 @@ export function apply(ctx, config) {
     //    （2026-10-14 教训：为了让它读工作区里的 AGENTS.md 把 cwd 改成工作区 ⇒
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
     //      现在改成"设定由插件读进来、内联进提示词" ✓，cwd 回到插件家 ✓）
-    /* ⭐ 工作目录 = **使用者的工作区**（2026-10-22 用户：「都搬进工作区哇，不然都要打开插件才能看到」）：
-     *    会话是按 cwd 分桶的（`%DSH_HOME%/sessions/--D-harness-bili-dsh--`），跑在插件家里
-     *    那些会话在界面里根本翻不到。
-     *    ⚠️ 但工作区的沙箱只让写 cwd ⇒ 报告/判重表/归档写不进插件家目录，
-     *      所以这三样改由 MCP 工具代写（见 promptFor 里那段「怎么交作业」）。
-     *    ⭐ 2026-10-22 再加一层：「跑在哪个目录」单独可配（`dutyCwd`）——
-     *      人设仍从「工作区」读，跑的位置可以是他日常那个目录，两者不再绑死。
-     *    ⚠️ 都没配或不存在时退回插件家（老行为，报告照样能写）。 */
-    const cwd = runDir()
+    /* ⭐ 工作目录 = **插件家**（2026-10-22 用户：「现在对话不进工作区记录了吧？不要进了」）：
+     *    会话是按 cwd 分桶的，跑在插件家里 ⇒ 会话落在 bili-duty 那个桶，不混进他的工作区列表。
+     *    人设（AGENTS.md）仍由宿主从「工作区」读进来、内联进提示词，跟跑在哪无关。 */
+    const cwd = stateDir
     log(`开跑（${why === 'manual' ? '手动' : why === 'noon' ? '中午' : why === 'night' ? '夜间' : why}）· 模型 ${cfg.dutyProvider || '跟随默认'}/${cfg.dutyModel || '默认'} · 本轮上限 ${Number(cfg.perRoundMax) || 0} 条`)
     const child = spawn(dsh.command, args, {
       cwd,
@@ -2755,9 +2734,6 @@ export function apply(ctx, config) {
       log: logFile,
       // ⭐ 人设是否真的读得到（设置页要能回答"我的人设生效了吗"）
       workspace: String(cfg.workspace || '').trim(),
-      /* ⭐ 跑在哪个目录（空 = 跟随工作区）：界面要显示它，并说明会话会出现在哪个列表里 */
-      dutyCwd: String(cfg.dutyCwd || '').trim(),
-      runDir: runDir(),
       agentsFound: (() => {
         const ws = String(cfg.workspace || '').trim()
         return Boolean(ws && existsSync(join(ws, 'AGENTS.md')))
@@ -2995,7 +2971,7 @@ export function apply(ctx, config) {
         'autoRun', 'autoRunsPerDay', 'autoGapMinutes', 'peakValleyOnly',
         'perRoundMax', 'perDayMax', 'transcribePerDay',
         'minDurationMin', 'maxDurationMin', 'preferSubtitle', 'subtitleProbeMax',
-        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'dutyProvider', 'dutyModel', 'workspace', 'dutyCwd', 'reportLevel', 'replyToComments', 'replyPerRound',
+        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'dutyProvider', 'dutyModel', 'workspace', 'reportLevel', 'replyToComments', 'replyPerRound',
         // 2026-10-22 守护评论区（骑士团）
         'guardOn', 'guardWhitelist', 'guardOwnAll', 'guardDailyCap', 'guardScope', 'guardPerRound', 'guardPollMinutes', 'guardEmoji', 'guardTone']) {
         if (k in body) patch[k] = body[k]

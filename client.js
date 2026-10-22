@@ -648,8 +648,7 @@ window.__ModuleLoader__.load({
       const [ws, setWs] = React.useState(null)
       /* ⭐ 跑在哪个目录（2026-10-22 用户：「不能直接显示吗？我工作区列表没有这个」）：
        *    会话按 cwd 分桶，跑在哪就出现在哪个工作区的会话列表里。留空 = 用工作区。 */
-      const [dutyCwd, setDutyCwd] = React.useState(null)
-      const [rl, setRl] = React.useState(null)
+          const [rl, setRl] = React.useState(null)
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
       const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
       const [runLog, setRunLog] = React.useState(null)     // 本轮进度（日志尾部 + 阶段）
@@ -761,8 +760,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (cfg && kws === null) setKws((cfg.keywords || []).join('\n'))
         if (cfg && ws === null) setWs(cfg.workspace || '')
-        if (cfg && dutyCwd === null) setDutyCwd(String(cfg.dutyCwd ?? ''))
-        if (cfg && rl === null) setRl(cfg.reportLevel || 'full')
+            if (cfg && rl === null) setRl(cfg.reportLevel || 'full')
         if (cfg && perDay === null) setPerDay(String(cfg.perDay ?? 5))
         if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))
         if (cfg && replyPer === null) setReplyPer(String(cfg.replyPerRound ?? 1))
@@ -1625,17 +1623,6 @@ window.__ModuleLoader__.load({
             'data-bd-textarea': '', rows: 4,
             placeholder: '每行一个关键词（留空 = 用内置那 5 组）',
             value: kws ?? '', onChange: (e) => setKws(e.target.value),
-          })),
-          h(StackRow, {
-            label: '值班跑在哪个目录',
-            desc: st.dutyCwd
-              ? `会话会出现在这个目录的会话列表里：${st.dutyCwd}`
-              : '留空 = 就用上面的工作区。会话是按目录分桶的 —— 想让它出现在你日常那个工作区的列表里，填那个目录（人设仍从工作区读）',
-          }, h('input', {
-            'data-bd-input': '', 'data-bd-w-full': '', value: dutyCwd ?? '',
-            placeholder: '留空 = 跟随工作区',
-            onChange: (e) => setDutyCwd(e.target.value),
-            onBlur: () => { patch({ dutyCwd: String(dutyCwd ?? '').trim() }, '值班跑在哪个目录') },
           })),
           h(StackRow, {
             label: '工作区路径',

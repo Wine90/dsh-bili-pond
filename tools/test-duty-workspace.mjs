@@ -21,12 +21,10 @@ const ok = (cond, msg) => {
   else { fails += 1; console.error(`  ✗ ${msg}`) }
 }
 
-console.log('=== 值班轮的 cwd 是工作区 ===')
-ok(/const runDir = \(\) => \{/.test(src), '应有一个「跑在哪个目录」的统一入口（runDir）')
-ok(/const c = String\(cfg\.dutyCwd \|\| ''\)\.trim\(\)/.test(src) && /if \(c && existsSync\(c\)\) return c/.test(src),
-  'runDir 应优先用 dutyCwd（会话按目录分桶，用户要求直接出现在他日常的列表里）')
-ok(/const cwd = runDir\(\)/.test(src),
-  '值班轮 cwd 应是工作区（没配/不存在才退回插件家）')
+console.log('=== 值班轮的 cwd 是插件家（不进用户工作区记录）===')
+ok(/const cwd = stateDir/.test(src),
+  '值班轮 cwd 应是插件家（2026-10-22 用户：「现在对话不进工作区记录了吧？不要进了」）')
+ok(!/dutyCwd/.test(src), '不该再有「跑在哪个目录」这个设置项')
 
 console.log('=== 值班轮不再固定会话（2026-10-22 用户：固定会话拿掉）===')
 ok(!/duty-session\.json/.test(src), '不该再读写 duty-session.json')
@@ -43,7 +41,7 @@ ok(/BILI_DUTY_HOME: '\$\{posix\(stateDir\)\}'/.test(src), 'overlay 应把 BILI_D
 ok(/'bili_report_save', 'bili_seen_read', 'bili_seen_append', 'bili_archive_append'/.test(src),
   '值班轮白名单里要有这四只代写工具')
 ok(/bili_report_save\(markdown\)/.test(src), '提示词应告诉模型用 bili_report_save 交报告')
-ok(/别用写文件工具去试，会报 sandbox 拒绝/.test(src), '提示词应明说别自己写文件（会被沙箱拒）')
+ok(/这一轮的工作目录就是插件数据目录/.test(src), '提示词应说明这一轮的工作目录就是插件家')
 ok(/bili_archive_append/.test(src) && /bili_seen_append\(lines\)/.test(src), '判重表与归档也要走工具')
 
 console.log('=== MCP 侧实现 ===')

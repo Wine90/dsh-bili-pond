@@ -148,9 +148,10 @@ ok(/const ensureFixedSessions = async \(\) =>/.test(src), '应有 ensureFixedSes
 ok(/B站值守 · 误删重启自动重建/.test(src), '值守那条会话的标题')
 ok(/B站私信 · 误删重启自动重建/.test(src), '私信那条会话的标题')
 ok(/if \(dutySess && !sawSession\)/.test(src), '值守会话被删了要自愈（清 id，下轮重建）')
-ok(/if \(!sid\) \{[\s\S]{0,500}?s\.sessionId = ''/.test(src), '私信会话被删了要自愈')
+ok(/if \(!sid\) \{[\s\S]{0,900}?s\.sessionId = ''/.test(src), '私信会话被删了要自愈')
+ok(/already owned\|active write handle\|locked\|in use/.test(src), '会话被上一轮占着时不许当成"被删了"')
 ok(/ensureFixedSessions\(\)\.catch/.test(src), '插件加载后要自动建一次')
-ok(/if \(flag\.done\) return/.test(src), '建过就不要重复建')
+ok(/String\(flag\.duty \|\| ''\) !== String\(duty\.sessionId\)/.test(src) && /String\(flag\.dm \|\| ''\) !== String\(dm\.sessionId\)/.test(src), '建过就不要重复建（按 id 逐条比对，不再用一个 done 总开关）')
 
 console.log('=== 私信改设置（A 档，用户 2026-10-22 拍板）===')
 ok(/def bili_setting_get\(/.test(py), 'mcp_server.py 应有 bili_setting_get')

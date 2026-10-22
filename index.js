@@ -1569,6 +1569,7 @@ export function apply(ctx, config) {
       const o = readJson(dutySessFile, {})
       /* ⚠️ 只在**同一个目录**下复用：会话是按 cwd 分桶的，换了目录再拿旧 id 续会报错 */
       if (String(o.cwd || '') === cwd) dutySess = String(o.sessionId || '')
+      else if (o.sessionId) log(`值班那条会话建在别的目录（${o.cwd || '?'}），这次工作目录是 ${cwd}，所以另起一条`)
     } catch { dutySess = '' }
     if (dutySess) args.push('--session-id', dutySess)
     args.push('--json')
@@ -2507,11 +2508,21 @@ export function apply(ctx, config) {
         if (sid) { try { const s = readDm(); s.sessionId = sid; saveDm(s) } catch { /* 记不住就算了 */ } }
         /* ⭐ 误删自愈（用户 2026-10-22：「误删了重启会自动创建」）：
          *    带 --session-id 却一个 session 事件都没拿到 ⇒ 那条会话没了（被删了/换了目录）
-         *    ⇒ 把 id 清掉，下一轮自动新建一条。 */
+         *    ⇒ 把 id 清掉，下一轮自动新建一条。
+         *    ⚠️ 2026-10-22 实测踩到：上一轮还没退干净时 dsh 报
+         *      `session "…" is already owned by an active write handle` —— 那是**占着**，不是删了。
+         *      旧代码不看错误内容就清 id ⇒ 每撞一次锁就丢一条会话（用户看到的就是「一轮对话后又换了」）。 */
         if (!sid) {
+          const locked = /already owned|active write handle|locked|in use/i.test(errAcc || '')
           try {
             const s = readDm()
-            if (s.sessionId) { s.sessionId = ''; saveDm(s); log('私信那条会话不见了（可能被删了），下一轮自动重建') }
+            if (!s.sessionId) { /* 本来就没有，无需处理 */ } else if (locked) {
+              log('私信那条会话正被上一轮占着（不是被删），这一轮先不换')
+            } else {
+              s.sessionId = ''
+              saveDm(s)
+              log('私信那条会话不见了（可能被删了），下一轮自动重建')
+            }
           } catch { /* 清不掉也无妨 */ }
         }
         const text = String(finalText || '').trim()
@@ -2573,34 +2584,38 @@ export function apply(ctx, config) {
     }
   })
 
-  /* 只在「第一次」建（fixed-sessions.json 打标记）；之后靠上面的自愈补。 */
+  /* 两条固定会话各建一次（fixed-sessions.json 记下「建过的 id」）；之后靠上面的自愈补。
+   * ⚠️ 2026-10-22 教训：旧版只用一个 `done` 总开关 + 「有 sessionId 就跳过」——
+   *    用户升级前已经有会话 id（标题是旧的、认不出），于是「B站私信」那条**从来没建**，
+   *    值守那条也被一轮值班换成新 id。现在按「这条 id 是不是我建的那条」逐条比对。 */
   const ensureFixedSessions = async () => {
     try {
       const flagFile = join(stateDir, 'fixed-sessions.json')
       const flag = readJson(flagFile, {})
-      if (flag.done) return
       const dir = runDir()
-      let okAll = true
+      const next = { at: new Date().toISOString() }
       const duty = readJson(dutySessFile, {})
-      if (!duty.sessionId) {
+      if (!duty.sessionId || String(flag.duty || '') !== String(duty.sessionId)) {
         const sid = await createSession('B站值守 · 误删重启自动重建', '这条对话用来记每一轮定时值班：挑了哪些视频、写了什么报告。', 'window')
         if (sid) {
           writeJson(dutySessFile, { sessionId: sid, cwd: dir, at: new Date().toISOString() })
+          next.duty = sid
           log('已建好「B站值守」那条固定会话')
-        } else okAll = false
-      }
+        } else next.duty = String(flag.duty || '')
+      } else next.duty = String(flag.duty || '')
       const dm = readDm()
-      if (!dm.sessionId) {
+      if (!dm.sessionId || String(flag.dm || '') !== String(dm.sessionId)) {
         const sid = await createSession('B站私信 · 误删重启自动重建', '这条对话用来记你在手机上给 B站 小号发的私信。', 'dm')
         if (sid) {
           const s = readDm()
           s.sessionId = sid
           s.cwd = dir
           saveDm(s)
+          next.dm = sid
           log('已建好「B站私信」那条固定会话')
-        } else okAll = false
-      }
-      if (okAll) writeJson(flagFile, { done: true, at: new Date().toISOString() })
+        } else next.dm = String(flag.dm || '')
+      } else next.dm = String(flag.dm || '')
+      writeJson(flagFile, next)
     } catch (e) {
       log(`建固定会话失败（不影响使用）：${e?.message ?? e}`)
     }

@@ -2387,7 +2387,12 @@ export function apply(ctx, config) {
        *    回一句「这是典型注入特征」；写成任务书，它会反问「你指的是哪种」；写成「# 私信遥控」开头，
        *    它会去翻仓库读代码研究这个功能。
        *    ✅ 唯一管用的是**大白话**：像人跟人说话那样把「他问了什么 / 我知道什么 / 你就这么回」讲清楚。 */
-      args.push(`主人刚在私信里给我发了条消息：${question}\n`
+      /* ⭐ 第一行会变成会话列表里的**标题**（2026-10-22 用户：「我在工作区看不到这条对话」——
+       *    其实它在，只是标题取的是提示词开头「主人刚在私信里给我发了条消息：…」，认不出来）。
+       *    ⇒ 首行写成 `私信：<他发的那句>`，列表里一眼就是他自己的话。 */
+      const brief = String(question || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+      args.push(`私信：${brief}\n\n`
+        + `主人刚在私信里给我发了条消息：${question}\n`
         + (context ? `\n我手头知道的（宿主查好的，能直接用，不够也能自己再查）：\n${context}\n` : '')
         + `\n他可能发视频链接 / BV 号，或者让我分析某个视频、找点东西、结合我这边的情况回答。\n`
         + `需要的话我自己调工具去取（字幕、简介、评论、搜索都能用），**别凭空编视频里没有的内容**。\n`
@@ -2420,6 +2425,7 @@ export function apply(ctx, config) {
         if (!line.trim()) return
         let ev = null
         try { ev = JSON.parse(line) } catch { return }
+        if (ev?.sessionId) sid = String(ev.sessionId)   // 事件类型不止一种带 sessionId，见一个记一个
         if (ev?.type === 'session' && ev.sessionId) sid = String(ev.sessionId)
         if (ev?.type === 'final' && typeof ev.text === 'string') finalText = ev.text
       }

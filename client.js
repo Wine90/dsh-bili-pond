@@ -676,10 +676,6 @@ window.__ModuleLoader__.load({
       const [guardTone, setGuardTone] = React.useState(null)      // 守护口径：怎么说话
       const [guardLog, setGuardLog] = React.useState(null)        // 守护记录（最近 50 条）
       const [guardLogBusy, setGuardLogBusy] = React.useState(false)
-      /* 私信遥控（2026-10-22）：大号发「# 状态」→ 小号扫到就执行并私信回一条 */
-      const [dmCtlOn, setDmCtlOn] = React.useState(null)
-      const [dmCtlPrefix, setDmCtlPrefix] = React.useState(null)
-      const [dmCtlPoll, setDmCtlPoll] = React.useState(null)
       const [autoRun, setAutoRun] = React.useState(null)
       const [runsPerDay, setRunsPerDay] = React.useState(null)
       const [gapMin, setGapMin] = React.useState(null)
@@ -783,9 +779,6 @@ window.__ModuleLoader__.load({
         if (cfg && guardPoll === null) setGuardPoll(String(cfg.guardPollMinutes ?? 3))
         if (cfg && guardEmoji === null) setGuardEmoji(cfg.guardEmoji !== false)
         if (cfg && guardTone === null) setGuardTone(String(cfg.guardTone ?? ''))
-        if (cfg && dmCtlOn === null) setDmCtlOn(Boolean(cfg.dmCtlOn))
-        if (cfg && dmCtlPrefix === null) setDmCtlPrefix(String(cfg.dmCtlPrefix ?? '#'))
-        if (cfg && dmCtlPoll === null) setDmCtlPoll(String(cfg.dmCtlPollMinutes ?? 5))
         if (cfg && autoRun === null) setAutoRun(Boolean(cfg.autoRun))
         if (cfg && runsPerDay === null) setRunsPerDay(String(cfg.autoRunsPerDay ?? 6))
         if (cfg && gapMin === null) setGapMin(String(cfg.autoGapMinutes ?? 60))
@@ -1603,50 +1596,6 @@ window.__ModuleLoader__.load({
               onChange: (e) => setGuardTone(e.target.value),
               onBlur: () => patch({ guardTone: String(guardTone ?? '') }, '守护口径'),
             }))) : null),
-
-        /* ══ ⑦.7 私信遥控 ══════════════════════════════════════════ */
-        h(Card, {
-          title: '私信遥控',
-          desc: '在手机上发一条私信，就能问它今天干了什么 —— 不用连 VPN、不用开网页',
-        },
-          h('div', { 'data-bd-row-desc': '' },
-            '只认「要 @ 谁」那个 UID（大号）发来的私信 —— 别人发什么都不理。'
-            + '你直接发就行，前缀可写可不写。'
-            + '每条都会起一轮（约 10 秒），全部进同一条会话 —— 翻会话就能看到完整记录。'),
-          h(SwitchRow, {
-            label: '打开私信遥控',
-            desc: '打开后按下面的频率扫私信，命中命令就执行，并把结果私信回你',
-            on: Boolean(dmCtlOn),
-            onChange: (v) => { setDmCtlOn(v); patch({ dmCtlOn: v }, '私信遥控') },
-          }),
-          Boolean(dmCtlOn) ? h('div', { 'data-bd-sub': '' },
-            h(Row, {
-              label: '命令前缀',
-              desc: '只有以前缀开头的私信才算命令；别的私信一律不理（默认 #）',
-            }, h('input', {
-              'data-bd-input': '', 'data-bd-w-num': '', type: 'text', maxLength: 4,
-              value: dmCtlPrefix ?? '#',
-              onChange: (e) => setDmCtlPrefix(e.target.value),
-              onBlur: () => {
-                const v = String(dmCtlPrefix ?? '#').trim() || '#'
-                setDmCtlPrefix(v)
-                patch({ dmCtlPrefix: v }, '命令前缀')
-              },
-            })),
-            h(Row, {
-              label: '几分钟扫一次私信',
-              desc: '闲时多久扫一次（默认 5 分钟）。扫到消息后 10 分钟内会自动加密到 20 秒，这里不用改',
-            }, h('input', {
-              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 1, max: 240,
-              value: dmCtlPoll ?? '',
-              onChange: (e) => setDmCtlPoll(e.target.value),
-              onBlur: () => {
-                const n = Math.max(1, Math.min(Number(dmCtlPoll) || 5, 240))
-                setDmCtlPoll(String(n))
-                patch({ dmCtlPollMinutes: n }, '扫私信间隔')
-              },
-            }))) : null,
-        ),
 
         /* ══ ⑦.6 守护记录 ═══════════════════════════════════════════ */
         guardOn ? h(Card, {

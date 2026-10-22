@@ -25,19 +25,16 @@ console.log('=== 值班轮的 cwd 是工作区 ===')
 ok(/const runDir = \(\) => \{/.test(src), '应有一个「跑在哪个目录」的统一入口（runDir）')
 ok(/const c = String\(cfg\.dutyCwd \|\| ''\)\.trim\(\)/.test(src) && /if \(c && existsSync\(c\)\) return c/.test(src),
   'runDir 应优先用 dutyCwd（会话按目录分桶，用户要求直接出现在他日常的列表里）')
-ok(/const cwd = runDir\(\)/.test(src) && /const cwdDir = runDir\(\)/.test(src),
+ok(/const cwd = runDir\(\)/.test(src),
   '值班轮 cwd 应是工作区（没配/不存在才退回插件家）')
 
-console.log('=== 值班轮固定同一条会话 ===')
-ok(/const dutySessFile = join\(stateDir, 'duty-session\.json'\)/.test(src),
-  '值班会话 id 应记在 duty-session.json（重启后还能接着用）')
-ok(/if \(dutySess\) args\.push\('--session-id', dutySess\)/.test(src),
-  '以后每轮都要续同一条会话（用户 2026-10-22：值班轮也进对话，不是新建，不然没有上下文）')
-ok(/args\.push\('--json'\)/.test(src), '要带 --json 才能从事件流里拿到 sessionId')
+console.log('=== 值班轮不再固定会话（2026-10-22 用户：固定会话拿掉）===')
+ok(!/duty-session\.json/.test(src), '不该再读写 duty-session.json')
+ok(!/--session-id/.test(src), '不该再带 --session-id 续会话')
+ok(/args\.push\('--json'\)/.test(src), '要带 --json 才能从事件流里拿到结果')
 const iPatch = src.indexOf("args.push('--patch', overlay)")
 const iJson = src.indexOf("args.push('--json')")
 ok(iPatch > 0 && iJson > iPatch, '--patch 必须排在 --json 前面（实测 --json 之后不认 --patch，整轮 3 秒就退）')
-ok(/ev\.type === 'session' && ev\.sessionId/.test(src), '应从事件流里捞 sessionId')
 ok(/守护评论区：替我回几条评论/.test(src) && /值班：刷一轮 B站/.test(src),
   '提示词首行应是可读标题（会话列表里显示的就是它）')
 

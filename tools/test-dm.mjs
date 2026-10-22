@@ -37,8 +37,15 @@ ok(/const baseline = now - 120_000/.test(src) && /first && ts < baseline/.test(s
 ok(/c\.dailyCap > 0 && dailyA\.count >= c\.dailyCap/.test(src) && /dailyA\.count >= c\.dailyCap[\s\S]{0,80}break/.test(src),
   '私信遥控也要有每日上限，而且必须**在起模型轮之前**判（否则白烧一轮再把结果丢掉）')
 ok(/if \(handled >= 5\) break/.test(src), '一轮最多处理 5 条，别一次刷屏')
-ok(/text: reply\.slice\(0, 480\)/.test(src), '回信要截断到 500 字以内（B站私信上限）')
+ok(/const body = String\(text \|\| ''\)\.slice\(0, 480\)/.test(src), '回信要截断到 500 字以内（B站私信上限）')
 ok(/}, 300_000\)/.test(src), '一轮最多等 5 分钟（用户 2026-10-22 定：分析视频要取字幕+读内容）')
+
+ok(/if \(r\?\.sessionId\) st\.sessionId = String\(r\.sessionId\)/.test(src),
+  '每轮要把 sessionId 接回状态（否则末尾 saveDm 会把新 id 覆盖成空 ⇒ 每条私信都新建会话）')
+
+ok(/const dmDeliver = async \(text, owner\) =>/.test(src), '发私信要回读校验（接口说成功不代表送到）')
+ok(/去掉链接再发一次/.test(src), '没送到时应去掉链接重发一次')
+ok(/const delivered = await dmDeliver\(reply, c\.owner\)/.test(src), '回信必须走 dmDeliver，不能直接 call(bili_send_message)')
 
 console.log('=== 私信遥控：只读命令 ===')
 ok(/if \(\/\^\(状态\|status\|s\)\$\/\.test\(cmd\)\) return dmStatusText\(\)/.test(src), '应支持「# 状态」')
@@ -57,7 +64,7 @@ ok(/type: 'dm', cmd: text\.slice\(0, 80\), ok: true/.test(src), '回成功要写
 console.log('=== 全部进会话（2026-10-22 用户口径） ===')
 ok(/const r = await dmAsk\(isAsk \? mAsk\[2\] : cmdText, dmContext\(\)\)/.test(src),
   '只读命令（状态/记录/帮助）也要起一轮、进同一条会话 —— 面板没人盯，会话才是能翻的记录')
-ok(/args\.push\(`主人刚在私信里给我发了条消息：\$\{question\}\\n`/.test(src),
+ok(/主人刚在私信里给我发了条消息：\$\{question\}/.test(src) && /私信：\$\{brief\}/.test(src),
   '提示词要用大白话（结构化块会被当成提示注入，实测踩过 4 种写法）')
 ok(/别自己发私信/.test(src), '要明确告诉它「别自己发私信」，发不发由宿主决定')
 const dmList = (/if \(why === 'dm'\)[\s\S]{0,700}?return \[([^\]]*)\]/.exec(src) || [])[1] || ''

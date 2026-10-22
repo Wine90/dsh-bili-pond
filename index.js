@@ -2364,6 +2364,31 @@ export function apply(ctx, config) {
     return parts.filter(Boolean).join('\n\n')
   }
 
+  /* ⭐ 发出去 ≠ 送到了（2026-10-22 实测）：`bili_send_message` 回 `success:true`、msg_key 也有，
+   *    可 B站 会话里根本没有这条 —— 带链接/偏长的私信会被静默吞掉。
+   *    所以发完**回读一次**：没看到就削掉链接、缩短再发一次；两次都不行就当失败记下来。 */
+  const dmDeliver = async (text, owner) => {
+    const body = String(text || '').slice(0, 480)
+    if (!body.trim()) return false
+    const probeOf = (s) => String(s).replace(/\s+/g, '').slice(0, 10)
+    const seen = async (probe) => {
+      try {
+        const raw = await call('bili_dm_inbox', { uid: owner, limit: 8 })
+        const d = typeof raw === 'string' ? JSON.parse(raw) : raw
+        return (d?.items || []).some((it) => it.dir === 'out' && String(it.text || '').includes(probe))
+      } catch { return true }   // 校验本身失败 ⇒ 当已送到（宁可漏报，也别把同一句话发两遍）
+    }
+    await call('bili_send_message', { receiver_uid: owner, text: body })
+    await new Promise((r) => setTimeout(r, 1500))
+    if (await seen(probeOf(body))) return true
+    const short = body.replace(/https?:\/\/\S+/g, '').replace(/[ \t]{2,}/g, ' ').trim().slice(0, 300)
+    if (!short || short === body) return false
+    log('私信遥控：发出去但会话里没看到（可能被吞），去掉链接再发一次')
+    await call('bili_send_message', { receiver_uid: owner, text: short })
+    await new Promise((r) => setTimeout(r, 1500))
+    return await seen(probeOf(short))
+  }
+
   const dmAsk = (question, context = '') => new Promise((resolve) => {
     let done = false
     const finish = (v) => { if (!done) { done = true; resolve(v) } }
@@ -2531,6 +2556,10 @@ export function apply(ctx, config) {
           }
           log(`私信遥控：起一轮处理「${cmdText.slice(0, 30)}」`)
           const r = await dmAsk(isAsk ? mAsk[2] : cmdText, dmContext())
+          /* ⭐ 把这一轮的 sessionId 接回本地状态（2026-10-22 实测：dmAsk 里已经存进文件了，
+           *    可本跳末尾 `saveDm(st)` 用的还是**开跳时读的旧 st**，sessionId 是空 ⇒ 又被覆盖回去，
+           *    结果每条私信都新建一个会话）。 */
+          if (r?.sessionId) st.sessionId = String(r.sessionId)
           rounds.count += 1; st.ask = rounds      // 每起一轮都算（不管是不是「问」）
           reply = r?.text ? r.text : (dmAnswer(cmdText) || `我这轮没跑成（${r?.error || '没有答复'}），过会儿再发我一次？`)
         }
@@ -2538,7 +2567,8 @@ export function apply(ctx, config) {
         const today = dayKey(new Date())
         const daily = st.daily?.date === today ? st.daily : { date: today, count: 0 }
         try {
-          await call('bili_send_message', { receiver_uid: c.owner, text: reply.slice(0, 480) })
+          const delivered = await dmDeliver(reply, c.owner)
+          if (!delivered) throw new Error('发出去但会话里没看到（被 B站 吞了？）')
           daily.count += 1
           handled += 1
           guardLogAppend({ ts: Date.now(), type: 'dm', cmd: text.slice(0, 80), ok: true })

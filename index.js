@@ -1849,11 +1849,20 @@ export function apply(ctx, config) {
         const raw = (d.pending && typeof d.pending === 'object') ? d.pending : {}
         for (const [k, v] of Object.entries(raw)) {
           if (typeof v === 'string') out[k] = { at: v, n: 1 }          // 兼容第一版的纯时间戳写法
-          else if (v && typeof v === 'object') out[k] = { at: String(v.at || new Date().toISOString()), n: Math.max(1, Number(v.n) || 1) }
+          else if (v && typeof v === 'object') {
+            out[k] = { at: String(v.at || new Date().toISOString()), n: Math.max(1, Number(v.n) || 1) }
+            /* ⚠️ 2026-10-22 审查修：`item`（条目细节）以前在这里被**丢掉**了 ——
+             *    guardScan 派发时明明写进去了，读回来却是 undefined，于是「挂了下一轮从
+             *    pending 补回」只能退回读守护记录；而守护记录按 500 条 / 400KB 轮转，
+             *    窗口一过细节就没了，那几条照样补不回来。 */
+            if (v.item && typeof v.item === 'object') out[k].item = v.item
+          }
         }
         return out
       })(),
       daily: { date: String(daily.date || ''), count: Number(daily.count) || 0 },
+      /* 状态文件版本：只给「只该跑一次」的迁移用（见 guardScan 里的 legacy 回溯段） */
+      v: Number(d.v) || 0,
     }
   }
 
@@ -1914,6 +1923,49 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 水位推进：算出下一轮该从哪儿接着扫。**纯函数**（只吃参数、不碰文件），所以能单测。
+   *
+   * 为什么要有这个函数：以前这段内联在 guardScan 里，把 ctimes / atId 一路推到「扫到的最大值」，
+   * 可只有前 perRound 条进 pending —— 剩下的既没入队、也没记账，水位却已经越过它们
+   * ⇒ 下一轮 since_ctimes 直接把它们排掉，**永远补不回来**，而且一条日志都不留。
+   * 默认 perRound=3，一次来 10 条有内容的评论 ⇒ 回 3 条、丢 7 条。
+   *
+   * 现在的口径：**被推迟的那批，水位退回到它们之前**，下一轮重新扫出来。
+   * 只有整批都处理完的视频 / @ 才按扫到的最大值推进。
+   * ⚠️ 但「日额度用完」（room === 0）造成的推迟**不回退** —— 那是「今天到此为止」，
+   *    回退只会让每 3 分钟重新扫一遍同一批、白烧风控额度。
+   *    （现在 guardScan 在额度用完时压根就不扫了，这里是兜底：万一以后有人改了调用顺序。）
+   */
+  const advanceWatermarks = ({ st, cur, cms, ordered, take, room }) => {
+    const takenRpid = new Set(take.map((t) => String(t.rpid)))
+    const deferred = room > 0 ? ordered.filter((t) => !takenRpid.has(String(t.rpid))) : []
+    const ctimes = { ...st.ctimes }
+    for (const c of cms) {
+      const b = String(c?.bvid || '')
+      const t = Number(c?.ctime || 0)
+      if (b && t > Number(ctimes[b] || 0)) ctimes[b] = t
+    }
+    for (const d of deferred) {
+      if (d.kind !== 'comment') continue
+      const b = String(d.bvid || '')
+      const t = Number(d.ctime || 0)
+      if (!b || !t) continue
+      const back = Math.max(0, t - 1)
+      if (back < Number(ctimes[b] || 0)) ctimes[b] = back
+    }
+    let nextAtId = Math.max(st.atId || 0, Number(cur.id) || 0)
+    let nextAtTime = Math.max(st.atTime || 0, Number(cur.time) || 0)
+    for (const d of deferred) {
+      if (d.kind !== 'at') continue
+      const aid = Number(d.atId) || 0
+      if (aid > 1 && aid - 1 < nextAtId) nextAtId = aid - 1
+      const at = Number(d.ctime) || 0
+      if (at > 1 && at - 1 < nextAtTime) nextAtTime = at - 1
+    }
+    return { ctimes, nextAtId, nextAtTime, deferred: deferred.length }
+  }
+
+  /**
    * 扫一次（只扫、不回）：返回 { ok, queued, items, error }
    * ⚠️ 水位**无论如何都推进**：否则同一批 @ 会被反复扫出来（评论区那边同理，按 ctime 推进）。
    */
@@ -1931,18 +1983,35 @@ export function apply(ctx, config) {
      *    出现 `reply ok:true` 才算回过；没发出去的下轮接着回，不能因为「派过」就当成回过。
      *    以前派发即记 seen + 水位同时推进 ⇒ 值班一挂，那几条就永远丢了。 */
     const answered = guardAnswered()
+    /* ⭐ 日额度用完就**根本别扫**（2026-10-22）：扫了也回不了，还白烧风控额度；
+     *    更要紧的是水位会越过这一批（见 ⑤ 的 room===0 分支），明天补不回来。
+     *    在这儿直接返回，水位原地不动，第二天接着从老水位扫。 */
+    const daily = { date: dayKey(new Date()), count: answered.today.size }
+    const room = g.dailyCap > 0 ? Math.max(0, g.dailyCap - daily.count) : Infinity
+    if (room === 0) {
+      guardLast = { at: Date.now(), queued: 0, skipped: 'daily-cap', error: '' }
+      return { ok: true, skipped: 'daily-cap', queued: 0, items: [] }
+    }
     for (const [rpid, p] of Object.entries(st.pending)) {
       if (answered.all.has(rpid)) { st.seen[rpid] = p.at; delete st.pending[rpid] }
     }
     /* ⭐ 旧版本（1.3.0 早期）「派发即记 seen」留下的账：seen 里有、但守护记录里没有 ok 回执的，
-     *    说明当时根本没发出去 —— 把它们当成 pending 补回来（只回溯 2 天，别把陈年老账翻出来重发）。 */
-    const legacyCut = Date.now() - 2 * 86_400_000
-    for (const [rpid, iso] of Object.entries(st.seen)) {
-      if (answered.all.has(rpid) || st.pending[rpid]) continue
-      const t = Date.parse(String(iso))
-      if (!(t >= legacyCut)) continue
-      st.pending[rpid] = { at: String(iso), n: 1 }
-      delete st.seen[rpid]
+     *    说明当时根本没发出去 —— 把它们当成 pending 补回来（只回溯 2 天，别把陈年老账翻出来重发）。
+     *    ⚠️ 2026-10-22 审查修：这段**必须只跑一次**（st.v < 2）。
+     *       以前每轮都跑，判据是 readGuardLog(500) 里的 ok 回执；可每次扫描都写一条 scan 行，
+     *       3 分钟一跳 ≈ 480 行/天 ⇒ 500 条的窗口只覆盖约 1 天。于是 1–2 天前回过的 rpid
+     *       回执已经掉出窗口 ⇒ 被误判成「没发出去」⇒ 从 seen 移进 pending，接着又因为
+     *       细节还原不出来被删掉 ⇒ 这个 rpid 从 seen 和 pending 里双双消失，判重台账丢了。 */
+    if (st.v < 2) {
+      const legacyCut = Date.now() - 2 * 86_400_000
+      for (const [rpid, iso] of Object.entries(st.seen)) {
+        if (answered.all.has(rpid) || st.pending[rpid]) continue
+        const t = Date.parse(String(iso))
+        if (!(t >= legacyCut)) continue
+        st.pending[rpid] = { at: String(iso), n: 1 }
+        delete st.seen[rpid]
+      }
+      st.v = 2
     }
     /* ⭐ 上一轮没发出去的，捞回来重试（水位已经越过它们了，只能从状态里补）。
      *    ⚠️ 2026-10-22 第二轮实测踩到：**不能靠 `guard-queue.json`** —— 提示词一构建清单就被删了，
@@ -1965,6 +2034,7 @@ export function apply(ctx, config) {
           uid: Number(it.uid) || 0,
           uname: String(it.uname || ''),
           text: String(it.text || ''),
+          root: Number(it.root) || 0,
         })
       }
     }
@@ -2020,6 +2090,12 @@ export function apply(ctx, config) {
         uname: String(it?.uname || ''), bvid: String(it?.bvid || ''),
         title: String(it?.title || ''), text: String(it?.text || ''),
         ctime: Number(it?.at_time || 0),
+        /* ⭐ 2026-10-22 审查补：@ 通道的两个「回对地方」必需字段
+         *    · atId  —— 服务端游标。被推迟到下轮的 @ 要靠它把水位退回去（见下面 ④）
+         *    · root  —— 楼中楼里 @ 我时，source_id 是**那条回复**的 rpid，光拿它当 root
+         *               会把回复挂到错误的楼层上（bili_reply 的 root=0 ⇒ actual_root=rpid） */
+        atId: Number(it?.id || 0),
+        root: Number(it?.root_id || 0),
       })
     }
     for (const c of cms) {
@@ -2042,27 +2118,15 @@ export function apply(ctx, config) {
         uname: String(c?.uname || ''), bvid: String(c?.bvid || ''),
         title: '', text: String(c?.text || ''),
         ctime: Number(c?.ctime || 0),
+        root: Number(c?.root || 0),
       })
     }
 
-    /* ④ 推进水位（即使这一轮没东西可回也要推，否则下次还扫同一批） */
-    const cur = scan?.at_cursor || {}
-    const ctimes = { ...st.ctimes }
-    for (const c of cms) {
-      const b = String(c?.bvid || '')
-      const t = Number(c?.ctime || 0)
-      if (b && t > Number(ctimes[b] || 0)) ctimes[b] = t
-    }
-    const nextAtId = Math.max(st.atId || 0, Number(cur.id) || 0)
-    const nextAtTime = Math.max(st.atTime || 0, Number(cur.time) || 0)
-
-    /* ⑤ 取前 N 条入队。**派发只记 pending，不记 seen** —— 只有真发出去（守护记录里 ok:true）
+    /* ④ 取前 N 条入队。**派发只记 pending，不记 seen** —— 只有真发出去（守护记录里 ok:true）
      *    才算回过；没发出去的下一轮从清单里捞回来重试（见上面那段对账）。 */
     /* ⭐ 每日硬上限（用户 2026-10-22：「可以设置啊」）：跨所有视频合计，防止一觉醒来刷几百条。
-     *    计数以「真发出去」为准（guardAnswered），不以「派出去」为准。 */
-    const today = dayKey(new Date())
-    const daily = { date: today, count: answered.today.size }
-    const room = g.dailyCap > 0 ? Math.max(0, g.dailyCap - daily.count) : Infinity
+     *    计数以「真发出去」为准（guardAnswered），不以「派出去」为准。
+     *    `daily` / `room` 在函数开头就算好了 —— 额度用完在那儿直接返回，连扫都不扫。 */
     /* 重试的排前面：它们已经等过一轮了；同一 rpid 试满 3 次还发不出去就放弃（评论删了/权限没了，别死循环） */
     const MAX_TRY = 3
     const ordered = []
@@ -2077,6 +2141,10 @@ export function apply(ctx, config) {
       ordered.push(it)
     }
     const take = ordered.slice(0, Math.min(g.perRound, room))
+
+    /* ⑤ 推进水位（即使这一轮没东西可回也要推，否则下次还扫同一批）—— 纯函数，见 advanceWatermarks */
+    const cur = scan?.at_cursor || {}
+    const { ctimes, nextAtId, nextAtTime } = advanceWatermarks({ st, cur, cms, ordered, take, room })
     const nowIso = new Date().toISOString()
     for (const t of take) {
       const k = String(t.rpid)
@@ -2084,7 +2152,7 @@ export function apply(ctx, config) {
       /* 条目细节跟着 pending 一起存：清单文件会被提示词构建删掉，挂了就只剩这个能还原 */
       st.pending[k] = {
         at: nowIso, n: (p?.n || 0) + 1,
-        item: { kind: t.kind, bvid: t.bvid, rpid: t.rpid, uid: t.uid, uname: t.uname, text: String(t.text || '').slice(0, 300) },
+        item: { kind: t.kind, bvid: t.bvid, rpid: t.rpid, uid: t.uid, uname: t.uname, text: String(t.text || '').slice(0, 300), root: Number(t.root) || 0 },
       }
     }
     /* pending 只留 2 天：再老的回不动了，别一直占着重试位 */
@@ -2093,7 +2161,7 @@ export function apply(ctx, config) {
       if (Date.parse(String(p?.at)) < pendCut) delete st.pending[rpid]
     }
     if (gaveUp) log(`守护：${gaveUp} 条试了 ${MAX_TRY} 次都没发出去，放弃（可能评论被删/权限变了）`)
-    saveGuard({ atId: nextAtId, atTime: nextAtTime, ctimes, seen: pruneSeen(st.seen), pending: st.pending, daily })
+    saveGuard({ atId: nextAtId, atTime: nextAtTime, ctimes, seen: pruneSeen(st.seen), pending: st.pending, daily, v: st.v })
 
     /* ⑥ 记录：扫了什么、为什么跳过、哪些派出去回了（界面「守护记录」读的就是这份） */
     guardLogAppend({
@@ -2138,7 +2206,8 @@ export function apply(ctx, config) {
       + `你是**这个号本人**（不是大号）。主人这会儿没空看评论，你替他回。**每条都要回一条**，用 \`bili_reply\` 精确回到他那条评论上：\n`
       + items.map((it, i) => `${i + 1}. [${it.kind === 'at' ? '@ 通知' : '评论区'}] ${it.uname}（UID ${it.uid}）· 视频 ${it.bvid}`
         + (it.title ? `《${String(it.title).slice(0, 60)}》` : '')
-        + `\n   他说：${String(it.text || '').slice(0, 300)}\n   rpid=${it.rpid}`).join('\n')
+        + `\n   他说：${String(it.text || '').slice(0, 300)}\n   rpid=${it.rpid}`
+        + (Number(it.root) > 0 ? ` · root=${it.root}` : '')).join('\n')
       + (tone ? `\n\n主人的口径（照这个说话，别越界；跟这条冲突就以这条为准）：\n${tone}\n` : '')
       + `\n\n怎么回：\n`
       + `① 先看内容：\`bili_subtitle\` 拿字幕；没字幕就只看标题+简介，**别凭空编视频里没有的东西**。\n`
@@ -2148,6 +2217,8 @@ export function apply(ctx, config) {
       + `但别每条都用同一个句式，换着说，别像模板。\n`
       + `④ 一条 1–3 句、**120 字以内**，像人说话，别写成报告。${emojiRule}\n`
       + `⑤ **必须带 rpid**：\`bili_reply(bvid="<上面的 BV 号>", text="...", rpid=<上面的 rpid>)\` —— 不带就是新开一条评论，等于答错地方。\n`
+      + `   上面那条如果还写了 \`root=...\`（说明他是在**楼中楼**里 @ 的你），\`root\` 也必须一并带上：`
+      + `\`bili_reply(bvid="...", text="...", rpid=<rpid>, root=<root>)\`，不带就会挂到错误的楼层上。\n`
       + `⑥ 每条只回一次；某条回不出去（风控/被删）就记进报告，**别重试刷屏**。\n`
       + `===== 守护任务结束 =====\n`
   }

@@ -113,8 +113,10 @@ ok(/guardTone: String\(guardTone \?\? ''\)/.test(readFileSync(join(here, '..', '
  * 现在：① 计数从守护记录里数 reply ok:true ② 派发只记 pending ③ 没发出去的下一轮从清单补回 */
 ok(/const guardAnswered = \(\) => \{[\s\S]{0,600}?e\?\.type !== 'reply' \|\| e\.ok !== true/.test(src),
   'guardAnswered 必须只数「reply 且 ok:true」，否则统计又变成派发数')
-ok(/daily = \{ date: today, count: answered\.today\.size \}/.test(src),
+ok(/daily = \{ date: [^,}]+?, count: answered\.today\.size \}/.test(src),
   '每日计数应取真发出去的条数（answered.today），不能用派发数累加')
+ok(/if \(room === 0\) \{[\s\S]{0,220}?skipped: 'daily-cap'/.test(src),
+  '日额度用完应直接返回、连扫都不扫（扫了也回不了，还会把水位推过这一批）')
 ok(/at: nowIso, n: \(p\?\.n \|\| 0\) \+ 1,/.test(src),
   '派发应只记 pending（含尝试次数），不能直接记 seen（否则失败了永远不重试）')
 ok(/item: \{ kind: t\.kind, bvid: t\.bvid, rpid: t\.rpid/.test(src),

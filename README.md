@@ -157,6 +157,8 @@ dsh plugin --profile desktop add link:/path/to/dsh-bili-pond
 - **记录读不到时不乱猜**：如果 `seen.md` 读取失败，不会把它当成“全部没看过”；这一轮会明确报错并宁可少做，避免重复打扰。
 - **想重看某一条**：在数据目录的 `seen.md` 里删掉对应 BV 记录即可。不要随意删除整份文件，否则历史视频可能被重新处理。
 
+> 普通手动轮和自动值班轮会拿到 `bili_seen_read` / `bili_seen_append`；直接运行裸 `dsh headless`，或运行“守护评论区”轮，不会有这两只工具。
+
 ### 评论区守护
 
 | 项 | 默认 | 说明 |

@@ -1257,6 +1257,14 @@ export function apply(ctx, config) {
    *    ⚠️ 别认单独一个 `provider:` —— `ui-chat`、`agent-default-model` 里也有 `provider: xxx`，
    *       那是"选哪条"，不是"定义哪条"，抄过去只会把 UI 配置也带进值班（实测踩过）。 */
   const ROUTE_BLOCK_HINT = /(^|\n)\s*(providers|models|baseURL|base_url|apiBase|apiKeyEnv|apiKey|api|displayName):/m
+  /** 直接抄进来的 llm-pi-ai 线路如果和值班 profile 里某个 provider 插件同名，
+   *  后加载的插件会盖掉/抢走 provider，结果同名但不是同一条线路。
+   *  典型：桌面自定义网关叫 workbuddy，headless 同时装了 dsh-connect-workbuddy。
+   *  既然宿主线路已经显式定义了这家 provider，就把值班 profile 里的同名插件关掉。 */
+  const ROUTE_PROVIDER_PACKAGES = {
+    workbuddy: 'dsh-connect-workbuddy',
+    'workbuddy-global': 'dsh-connect-workbuddy',
+  }
   /** 值班那一轮的默认模型由本插件自己写（设置页），宿主的这条不能抄 —— 否则会悄悄改掉用户选的模型 */
   const ROUTE_SKIP_IDS = new Set(['agent-default-model'])
 
@@ -1294,6 +1302,14 @@ export function apply(ctx, config) {
     const home = String(process.env.DSH_HOME || '').trim()
     const prof = String(process.env.DSH_PROFILE || '').trim()
     if (home && prof) add(join(home, 'profiles', prof, 'cordis.patch.yml'), true)
+    /* ⭐ Electron + Junction 安装时，Node 看到的是真实仓库路径，往上走永远找不到
+     *   `~/.dsh/profiles/desktop`。从宿主服务拿 profile 名和 DSH home，才能真正找到
+     *   “加载我的那个 profile”的补丁层。 */
+    let hostProfile = 'desktop'
+    try { hostProfile = String(ctx.get?.('profileContext')?.name || hostProfile).trim() || hostProfile } catch { /* 用默认 desktop */ }
+    let homePath = null
+    try { homePath = ctx.get?.('dshHomePath') } catch { /* 再走下面的 env 兜底 */ }
+    if (typeof homePath === 'function') add(homePath('profiles', hostProfile, 'cordis.patch.yml'), true)
     patchCandsSeen = cands.map(([file, trusted]) => {
       let exists = false
       try { exists = existsSync(file) } catch { exists = false }
@@ -1336,6 +1352,7 @@ export function apply(ctx, config) {
     if (!text.trim()) return []
     const out = []
     const taken = []
+    const disableProviders = new Set()
     const seen = new Set()
     for (const b of splitPatchBlocks(text)) {
       if (seen.has(b.id)) continue
@@ -1346,10 +1363,23 @@ export function apply(ctx, config) {
       seen.add(b.id)
       taken.push(b.id)
       out.push(body.replace(/\s+$/, ''), '')
+      if (b.id === 'llm-pi-ai') {
+        const declared = new Set(
+          b.lines
+            .map((line) => /^\s{2,}([A-Za-z0-9_.-]+):\s*$/.exec(line)?.[1])
+            .filter(Boolean),
+        )
+        for (const [provider, packageName] of Object.entries(ROUTE_PROVIDER_PACKAGES)) {
+          if (declared.has(provider)) disableProviders.add(packageName)
+        }
+      }
+    }
+    for (const packageName of disableProviders) {
+      out.push(`- id: ${packageName}`, '  disabled: true', '')
     }
     if (taken.length) {
       routeIdsSeen = taken.slice()
-      log(`值班会带上宿主的线路配置：${taken.join('、')}`)
+      log(`值班会带上宿主的线路配置：${taken.join('、')}${disableProviders.size ? `；并停用同名 provider 插件：${[...disableProviders].join('、')}` : ''}`)
     }
     return out
   }

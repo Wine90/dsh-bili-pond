@@ -31,14 +31,24 @@ ok(b > a, 'index.js 里找不到 writeRouteOverlay')
 const src = idx.slice(a, idx.lastIndexOf('/**', b) > a ? idx.lastIndexOf('/**', b) : b)
 
 const logs = []
+let ctxProfile = 'desktop'
+let ctxHome = null
+const ctxStub = {
+  get(name) {
+    if (name === 'profileContext') return { name: ctxProfile }
+    if (name === 'dshHomePath') return (...parts) => join(ctxHome ?? dir, ...parts)
+    return undefined
+  },
+}
 /* ⚠️ 沙箱必须把源码里用到的依赖都喂进去，否则"通过"只是恰好没走到那条路。 */
 const build = (cfg, pluginDir) => new Function(
-  'cfg', 'log', 'readFileSync', 'join', 'process', 'existsSync', 'pluginDir',
+  'cfg', 'log', 'readFileSync', 'join', 'process', 'existsSync', 'pluginDir', 'ctx',
   src + '\nreturn { splitPatchBlocks, routeOverlayYml, hostPatchFile, ROUTE_SKIP_IDS }',
-)(cfg, (m) => logs.push(String(m)), readFileSync, join, process, existsSync, pluginDir)
+)(cfg, (m) => logs.push(String(m)), readFileSync, join, process, existsSync, pluginDir, ctxStub)
 
 // ── 造一个假的宿主 profile 补丁层 ──
 const dir = mkdtempSync(join(tmpdir(), 'pond-routes-'))
+ctxHome = dir
 const profileDir = join(dir, 'profiles', 'desktop')
 mkdirSync(join(profileDir, 'node_modules'), { recursive: true })
 const patch = `- id: agent-default-model
@@ -59,6 +69,10 @@ const patch = `- id: agent-default-model
         api: openai-completions
         baseURL: http://127.0.0.1:8788/v1
         apiKeyEnv: WORKBUDDY_LOCAL_API_KEY
+      workbuddy:
+        displayName: 我的 WorkBuddy 网关
+        api: openai-completions
+        baseURL: http://127.0.0.1:8790/v1
       my-gateway:
         displayName: 我自己起的网关
         baseURL: http://10.0.0.5:8080/v1
@@ -98,7 +112,10 @@ const noEnv = () => { for (const k of Object.keys(envBackup)) delete process.env
   ok(yml.length > 0, 'routeOverlayYml() 什么都没生成（宿主明明有 llm-pi-ai 那块）')
   ok(text.includes('- id: llm-pi-ai'), '没带上 llm-pi-ai 这块')
   ok(text.includes('workbuddy-local:'), '没带上 workbuddy-local 这条线路')
+  ok(text.includes('workbuddy:'), '没带上和 provider 插件同名的网关线路')
   ok(text.includes('my-gateway:'), '没带上用户自己起的第二条线路（名字任意也得带上）')
+  ok(text.includes('- id: dsh-connect-workbuddy\n  disabled: true'),
+    '带上同名 workbuddy 直连线路后，没有停用 headless 里的 dsh-connect-workbuddy（provider 会被抢走）')
   ok(!text.includes('- id: agent-default-model'), '把宿主默认模型也抄过去了（会悄悄改掉设置页选的模型）')
   ok(!text.includes('- id: permission'), '把权限策略那块也抄过去了（用户明确说只要模型相关）')
   ok(!text.includes('- id: ui-chat'), '把 UI 配置抄过去了')
@@ -113,6 +130,18 @@ const noEnv = () => { for (const k of Object.keys(envBackup)) delete process.env
   ok(yml[yml.length - 1] === '', '最后一块没留结尾空行（拼进 headless-overlay.yml 时会和下一条粘住）')
 }
 
+// ①.5 Junction 安装：插件真实路径在仓库里，但宿主服务能告诉我们 profile 和 DSH home
+{
+  noEnv()
+  const junctionDir = join(dir, 'repos', 'dsh-bili-pond')
+  mkdirSync(junctionDir, { recursive: true })
+  const h = build({ reuseRoutes: true }, junctionDir)
+  ok(h.hostPatchFile() === join(profileDir, 'cordis.patch.yml'),
+    'Junction 安装时没通过 profileContext + dshHomePath 找到宿主补丁层')
+  ok(h.routeOverlayYml().join('\n').includes('baseURL: http://127.0.0.1:8790/v1'),
+    'Junction 安装时没把宿主网关线路带进 overlay')
+}
+
 // ② 关掉开关 ⇒ 一个字都不带（用户另一个选择：失败也照旧跑）
 {
   noEnv()
@@ -124,12 +153,14 @@ const noEnv = () => { for (const k of Object.keys(envBackup)) delete process.env
 {
   noEnv()
   process.env.DSH_PROFILE_DIR = join(dir, 'profiles', 'nope')
+  ctxHome = join(dir, 'empty-home')
   const h = build({ reuseRoutes: true }, join(dir, 'not-a-profile', 'node_modules', 'dsh-bili-pond'))
   let threw = null
   let yml = []
   try { yml = h.routeOverlayYml() } catch (e) { threw = e }
   ok(!threw, '补丁文件不存在时抛异常了（会把整个值班卡死）: ' + (threw && threw.message))
   ok(yml.length === 0, '补丁文件不存在时还生成了内容')
+  ctxHome = dir
 }
 
 // ④ 只有 DSH_HOME + DSH_PROFILE 时也要能找到（CLI 版没有 DSH_PROFILE_DIR）

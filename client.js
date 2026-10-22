@@ -1500,7 +1500,7 @@ window.__ModuleLoader__.load({
             '用的是小号（骑士号）的登录态：它会以自己的身份回复，并说明是替你回的；不会动大号的评论/弹幕权限。'),
           h(SwitchRow, {
             label: '守护评论区',
-            desc: '打开后按下面的频率扫评论，命中就自动回一条',
+            desc: '独立于「自动运行」；打开后按下面的频率扫评论，命中就自动回一条。关掉这里才会停止定时扫描',
             on: Boolean(guardOn),
             onChange: (v) => { setGuardOn(v); patch({ guardOn: v }, '守护评论区') },
           }),

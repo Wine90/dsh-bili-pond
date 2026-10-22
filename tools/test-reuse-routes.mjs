@@ -166,6 +166,12 @@ ok(/reuseRoutes: z\.boolean\(\)/.test(idx), '设置项 reuseRoutes 没进 schema
 ok(/routePatch: hostPatchFile\(\)/.test(idx), '/api/bili-pond/models 没回 routePatch（出问题时无法排查）')
 ok(/routeIds: routeIdsSeen/.test(idx), '/api/bili-pond/models 没回 routeIds')
 ok(/routeCandidates: patchCandsSeen/.test(idx), '/api/bili-pond/models 没回 routeCandidates')
+/* 🔴 2026-10-22 实测：agent-default-model 的 model 是必填，只写 provider 会让插件激活失败、
+ *    整个值班 exit 1（`$.model missing required value`）。所以「只选线路没选模型」必须**不写**。 */
+ok(/if \(!model\) \{[\s\S]{0,240}return \[\]/.test(idx),
+  'modelOverrideYml 在没选具体模型时必须返回空（否则写出无效配置把值班打死）')
+ok(/这一轮跟随 profile 默认模型（不写 agent-default-model/.test(idx), '没选模型时应写一条日志说清楚这一轮跟随默认')
+ok(/warn: `线路选了「\$\{prov\}」但没选具体模型/.test(idx), 'checkDutyModel 应把「只选线路没选模型」当提示返回')
 
 // 收尾
 for (const k of Object.keys(envBackup)) {

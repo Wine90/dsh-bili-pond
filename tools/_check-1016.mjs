@@ -111,7 +111,7 @@ ok(mcpSrc.includes('_ALLOWED ='), 'mcp_server.py 没有 _ALLOWED 白名单集合
 ok(!/^\s*@mcp\.tool\(\)/m.test(mcpSrc), 'mcp_server.py 里还有裸的 @mcp.tool()：那个工具会绕过白名单')
 const decorated = (mcpSrc.match(/^@tool\(\)/gm) || []).length
 ok(decorated >= 27, `mcp_server.py 里 @tool() 只有 ${decorated} 处（预期 ≥27 —— 是不是有工具漏改）`)
-ok(idx.includes('const mcpWhitelist = () =>'), 'index.js 里没有 mcpWhitelist')
+ok(idx.includes('const mcpWhitelist = (why = \'window\') =>'), 'index.js 里没有 mcpWhitelist（或签名变了：它现在按这一轮来源算白名单）')
 for (const t of ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_reply']) {
   ok(idx.includes(`'${t}'`), `白名单里少了 ${t}`)
 }

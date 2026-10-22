@@ -646,6 +646,9 @@ window.__ModuleLoader__.load({
       const [msgTone, setMsgTone] = React.useState('')
       const [kws, setKws] = React.useState(null)
       const [ws, setWs] = React.useState(null)
+      /* ⭐ 跑在哪个目录（2026-10-22 用户：「不能直接显示吗？我工作区列表没有这个」）：
+       *    会话按 cwd 分桶，跑在哪就出现在哪个工作区的会话列表里。留空 = 用工作区。 */
+      const [dutyCwd, setDutyCwd] = React.useState(null)
       const [rl, setRl] = React.useState(null)
       const [newVer, setNewVer] = React.useState('')       // 发现的新版本号（空 = 没发现）
       const [selfUpgrade, setSelfUpgrade] = React.useState(true)  // 桌面版不能自升级，只提示去「设置 → 插件」
@@ -660,6 +663,23 @@ window.__ModuleLoader__.load({
       const [replyPer, setReplyPer] = React.useState(null)
       const [dmUid, setDmUid] = React.useState(null)        // 私信收件人 UID（本地草稿）
       const [dmOn, setDmOn] = React.useState(null)          // 私信开关（独立于评论）
+      /* 守护评论区（骑士团）：字段名由宿主 schema 定死，这里只采集 + 保存。
+       * 跟上面那些输入框一样绑**本地草稿** —— 5 秒一次的 /status 轮询会盖掉直接绑 cfg 的值。 */
+      const [guardOn, setGuardOn] = React.useState(null)          // 守护总开关
+      const [guardOwnAll, setGuardOwnAll] = React.useState(null)  // 大号视频下不用 @ 也回
+      const [guardDailyCap, setGuardDailyCap] = React.useState(null)  // 每天最多回几条
+      const [guardWhitelist, setGuardWhitelist] = React.useState(null)  // 白名单 UID（逗号/空格分隔）
+      const [guardScope, setGuardScope] = React.useState(null)    // 守最近几条视频
+      const [guardPerRound, setGuardPerRound] = React.useState(null)  // 每轮最多回几条
+      const [guardPoll, setGuardPoll] = React.useState(null)      // 多少分钟扫一次
+      const [guardEmoji, setGuardEmoji] = React.useState(null)    // 回复末尾带表情
+      const [guardTone, setGuardTone] = React.useState(null)      // 守护口径：怎么说话
+      const [guardLog, setGuardLog] = React.useState(null)        // 守护记录（最近 50 条）
+      const [guardLogBusy, setGuardLogBusy] = React.useState(false)
+      /* 私信遥控（2026-10-22）：大号发「# 状态」→ 小号扫到就执行并私信回一条 */
+      const [dmCtlOn, setDmCtlOn] = React.useState(null)
+      const [dmCtlPrefix, setDmCtlPrefix] = React.useState(null)
+      const [dmCtlPoll, setDmCtlPoll] = React.useState(null)
       const [autoRun, setAutoRun] = React.useState(null)
       const [runsPerDay, setRunsPerDay] = React.useState(null)
       const [gapMin, setGapMin] = React.useState(null)
@@ -745,6 +765,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (cfg && kws === null) setKws((cfg.keywords || []).join('\n'))
         if (cfg && ws === null) setWs(cfg.workspace || '')
+        if (cfg && dutyCwd === null) setDutyCwd(String(cfg.dutyCwd ?? ''))
         if (cfg && rl === null) setRl(cfg.reportLevel || 'full')
         if (cfg && perDay === null) setPerDay(String(cfg.perDay ?? 5))
         if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))
@@ -753,6 +774,18 @@ window.__ModuleLoader__.load({
         if (cfg && mentionUid === null) setMentionUid(cfg.mentionUid ? String(cfg.mentionUid) : '')
         if (cfg && dmUid === null) setDmUid(cfg.dmUid ? String(cfg.dmUid) : '')
         if (cfg && dmOn === null) setDmOn(Boolean(cfg.dmOn))
+        if (cfg && guardOn === null) setGuardOn(Boolean(cfg.guardOn))
+        if (cfg && guardOwnAll === null) setGuardOwnAll(cfg.guardOwnAll !== false)
+        if (cfg && guardDailyCap === null) setGuardDailyCap(String(cfg.guardDailyCap ?? 30))
+        if (cfg && guardWhitelist === null) setGuardWhitelist(String(cfg.guardWhitelist ?? ''))
+        if (cfg && guardScope === null) setGuardScope(String(cfg.guardScope ?? 1))
+        if (cfg && guardPerRound === null) setGuardPerRound(String(cfg.guardPerRound ?? 3))
+        if (cfg && guardPoll === null) setGuardPoll(String(cfg.guardPollMinutes ?? 3))
+        if (cfg && guardEmoji === null) setGuardEmoji(cfg.guardEmoji !== false)
+        if (cfg && guardTone === null) setGuardTone(String(cfg.guardTone ?? ''))
+        if (cfg && dmCtlOn === null) setDmCtlOn(Boolean(cfg.dmCtlOn))
+        if (cfg && dmCtlPrefix === null) setDmCtlPrefix(String(cfg.dmCtlPrefix ?? '#'))
+        if (cfg && dmCtlPoll === null) setDmCtlPoll(String(cfg.dmCtlPollMinutes ?? 5))
         if (cfg && autoRun === null) setAutoRun(Boolean(cfg.autoRun))
         if (cfg && runsPerDay === null) setRunsPerDay(String(cfg.autoRunsPerDay ?? 6))
         if (cfg && gapMin === null) setGapMin(String(cfg.autoGapMinutes ?? 60))
@@ -765,6 +798,44 @@ window.__ModuleLoader__.load({
         if (cfg && preferSub === null) setPreferSub(cfg.preferSubtitle !== false)
         if (cfg && probeMax === null) setProbeMax(String(cfg.subtitleProbeMax ?? 3))
       }, [cfg])
+
+      /* ⭐ 守护记录（2026-10-22）：自动拿号说话，必须能事后核对。
+       *    数据来自 /guard/log —— 宿主写「扫到什么/判成什么」，MCP 子进程写「真发出去什么」。
+       *    开关打开时才拉（关着没意义），另外给个手动刷新按钮。 */
+      const loadGuardLog = async () => {
+        setGuardLogBusy(true)
+        try { setGuardLog(await jget('/guard/log?limit=50')) } catch { /* 网络抖一下就跳过 */ } finally { setGuardLogBusy(false) }
+      }
+      React.useEffect(() => {
+        if (guardOn) { loadGuardLog() } else { setGuardLog(null) }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [guardOn])
+
+      /* 守护记录列表：三种行 —— scan（扫了一次）/ queue（派出去回）/ reply（真发出去了） */
+      const renderGuardLog = () => {
+        const items = Array.isArray(guardLog?.items) ? guardLog.items : []
+        if (!items.length) return h('div', { 'data-bd-row-desc': '' }, '还没有记录。开关打开后，扫到东西就会写在这里。')
+        const hhmm = (ts) => {
+          const d = new Date(Number(ts) || 0)
+          return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+        }
+        const line = (key, text) => h('div', { key, 'data-bd-row-desc': '', style: { padding: '3px 0' } }, text)
+        return h('div', {}, items.map((it, i) => {
+          if (it?.type === 'scan') {
+            const s = it.skip || {}
+            return line('s' + i, `${hhmm(it.ts)} · 扫了一次：@ ${it?.scanned?.at ?? 0} 条 / 评论 ${it?.scanned?.comments ?? 0} 条 → 派 ${it.queued ?? 0} 条`
+              + `（跳过：纯水 ${s.junk ?? 0} · 自己 ${s.owner ?? 0} · 已回过 ${s.seen ?? 0} · 不在白名单 ${s.wl ?? 0}）`)
+          }
+          if (it?.type === 'queue') {
+            return line('q' + i, `${hhmm(it.ts)} · ${it.kind === 'at' ? '@ 通知' : '评论区'} · ${it.uname || it.uid}：${String(it.text || '').slice(0, 60)}`)
+          }
+          if (it?.type === 'reply') {
+            return line('r' + i, `${hhmm(it.ts)} · ${it.ok ? '✅ 已回' : '❌ 没回成'}${it.bvid ? ' · ' + it.bvid : ''}${it.rpid ? ' · rpid=' + it.rpid : ''}`
+              + `：${String(it.text || '').slice(0, 80)}${it.ok ? '' : `（${String(it.error || '').slice(0, 80)}）`}`)
+          }
+          return null
+        }))
+      }
 
       /* ⭐ 本轮进度轮询（2026-10-20）：跑着的时候每 2 秒拉一次日志尾部，跑完再拉一次收尾。
        *    只读日志尾部，不攒内存；st.running 一变就重建定时器。 */
@@ -1423,6 +1494,179 @@ window.__ModuleLoader__.load({
               '私信内容为本轮各条的「标题 + 链接 + 一句话理由」，每轮合并为一条（不受 150 字限制）。'),
             h('div', { 'data-bd-row-desc': '' },
               '⚠️ 建议与收件人互相关注：B站 对陌生人私信设有频率限制，且可能不推送提醒。')) : null),
+
+        /* ══ ⑦.5 守护评论区（骑士团） ═══════════════════════════════════
+         * 用一个小号盯着自己视频的评论区：白名单里的人 @ 它（或在它视频下评论）时，
+         * 自动以自己的身份回一条。
+         * 字段名由宿主 schema 定死（guardOn / guardWhitelist / guardScope /
+         * guardPerRound / guardPollMinutes / guardEmoji），这里只负责采集与保存。
+         * 总开关关掉时，下面 5 项跟别处一样收进 data-bd-sub 里不显示。 */
+        h(Card, {
+          title: '守护评论区（骑士团）',
+          desc: '用一个小号替你盯着评论区：你视频下有人说话，它替你回',
+        },
+          h('div', { 'data-bd-row-desc': '' },
+            '用的是小号（骑士号）的登录态：它会以自己的身份回复，并说明是替你回的；不会动大号的评论/弹幕权限。'),
+          h(SwitchRow, {
+            label: '守护评论区',
+            desc: '打开后按下面的频率扫评论，命中就自动回一条',
+            on: Boolean(guardOn),
+            onChange: (v) => { setGuardOn(v); patch({ guardOn: v }, '守护评论区') },
+          }),
+          Boolean(guardOn) ? h('div', { 'data-bd-sub': '' },
+            h(SwitchRow, {
+              label: '我的视频下不用 @ 也回',
+              desc: '开（默认）：你视频的评论区有人说话就回，纯水/广告跳过。关：只回白名单里的人',
+              on: guardOwnAll !== false,
+              onChange: (v) => { setGuardOwnAll(v); patch({ guardOwnAll: v }, '视频下不用@也回') },
+            }),
+            h(Row, {
+              label: '每天最多回几条',
+              desc: '默认 30，跨所有视频合计。填 0 = 不限（不建议）',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 0, max: 500,
+              value: guardDailyCap ?? '',
+              onChange: (e) => setGuardDailyCap(e.target.value),
+              onBlur: () => {
+                const n = Math.max(0, Math.min(Number(guardDailyCap) || 0, 500))
+                setGuardDailyCap(String(n))
+                patch({ guardDailyCap: n }, '每天最多回几条')
+              },
+            })),
+            h(StackRow, {
+              label: '白名单 UID（只管别人视频下的 @）',
+              desc: '只有这些人 @ 小号才回；留空 = 只认「在评论里 @ 谁」那个 UID。多个用逗号或空格隔开，例如 123456, 789012',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-full': '', type: 'text',
+              placeholder: '留空 = 只认「要 @ 谁」那个 UID',
+              value: guardWhitelist ?? '',
+              onChange: (e) => setGuardWhitelist(e.target.value),
+              onBlur: () => {
+                const v = String(guardWhitelist ?? '').trim()
+                setGuardWhitelist(v)
+                patch({ guardWhitelist: v }, '白名单 UID')
+              },
+            })),
+            h(Row, {
+              label: '守最近几条视频',
+              desc: '1 = 只守最新一条视频；调大会多扫几条，请求量也跟着涨',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 1, max: 10,
+              value: guardScope ?? '',
+              onChange: (e) => setGuardScope(e.target.value),
+              onBlur: () => {
+                const n = Math.max(1, Math.min(Number(guardScope) || 1, 10))
+                setGuardScope(String(n))
+                patch({ guardScope: n }, '守最近几条视频')
+              },
+            })),
+            h(Row, {
+              label: '每轮最多回几条',
+              desc: '默认 3。回得越多越像机器人，B站 对高频回复也有风控',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 1, max: 20,
+              value: guardPerRound ?? '',
+              onChange: (e) => setGuardPerRound(e.target.value),
+              onBlur: () => {
+                /* 范围跟宿主 guardCfg() 的钳制口径一致（1–20），别在界面上悄悄改掉原生设置页填的值 */
+                const n = Math.max(1, Math.min(Number(guardPerRound) || 3, 20))
+                setGuardPerRound(String(n))
+                patch({ guardPerRound: n }, '每轮最多回几条')
+              },
+            })),
+            h(Row, {
+              label: '多久扫一次',
+              desc: '分钟。默认 3；调太小会一直请求评论区，容易触发风控',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 1, max: 240,
+              value: guardPoll ?? '',
+              onChange: (e) => setGuardPoll(e.target.value),
+              onBlur: () => {
+                const n = Math.max(1, Math.min(Number(guardPoll) || 3, 240))
+                setGuardPoll(String(n))
+                patch({ guardPollMinutes: n }, '多久扫一次')
+              },
+            })),
+            h(SwitchRow, {
+              label: '回复末尾带表情',
+              desc: '默认带一个，读起来更像真人；关掉就是纯文字',
+              on: guardEmoji !== false,
+              onChange: (v) => { setGuardEmoji(v); patch({ guardEmoji: v }, '回复带表情') },
+            }),
+            h(StackRow, {
+              label: '守护口径（怎么说话）',
+              desc: '写几句就行：你是做什么的、哪些能答、哪些不能提。比给每条视频写内容描述管用 —— 内容字幕里有，口径字幕里没有',
+            }, h('textarea', {
+              'data-bd-textarea': '', rows: 4,
+              placeholder: '例：我是做安全运维的，复现细节可以答，但不给能直接利用的 POC；有人指出错误先承认再补充；公司/客户的事一律不提',
+              value: guardTone ?? '',
+              onChange: (e) => setGuardTone(e.target.value),
+              onBlur: () => patch({ guardTone: String(guardTone ?? '') }, '守护口径'),
+            }))) : null),
+
+        /* ══ ⑦.7 私信遥控 ══════════════════════════════════════════ */
+        h(Card, {
+          title: '私信遥控',
+          desc: '在手机上发一条私信，就能问它今天干了什么 —— 不用连 VPN、不用开网页',
+        },
+          h('div', { 'data-bd-row-desc': '' },
+            '只认「要 @ 谁」那个 UID（大号）发来的私信 —— 别人发什么都不理。'
+            + '你直接发就行，前缀可写可不写。'
+            + '每条都会起一轮（约 10 秒），全部进同一条会话 —— 翻会话就能看到完整记录。'),
+          h(SwitchRow, {
+            label: '打开私信遥控',
+            desc: '打开后按下面的频率扫私信，命中命令就执行，并把结果私信回你',
+            on: Boolean(dmCtlOn),
+            onChange: (v) => { setDmCtlOn(v); patch({ dmCtlOn: v }, '私信遥控') },
+          }),
+          Boolean(dmCtlOn) ? h('div', { 'data-bd-sub': '' },
+            h(Row, {
+              label: '命令前缀',
+              desc: '只有以前缀开头的私信才算命令；别的私信一律不理（默认 #）',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'text', maxLength: 4,
+              value: dmCtlPrefix ?? '#',
+              onChange: (e) => setDmCtlPrefix(e.target.value),
+              onBlur: () => {
+                const v = String(dmCtlPrefix ?? '#').trim() || '#'
+                setDmCtlPrefix(v)
+                patch({ dmCtlPrefix: v }, '命令前缀')
+              },
+            })),
+            h(Row, {
+              label: '几分钟扫一次私信',
+              desc: '闲时多久扫一次（默认 5 分钟）。扫到消息后 10 分钟内会自动加密到 20 秒，这里不用改',
+            }, h('input', {
+              'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 1, max: 240,
+              value: dmCtlPoll ?? '',
+              onChange: (e) => setDmCtlPoll(e.target.value),
+              onBlur: () => {
+                const n = Math.max(1, Math.min(Number(dmCtlPoll) || 5, 240))
+                setDmCtlPoll(String(n))
+                patch({ dmCtlPollMinutes: n }, '扫私信间隔')
+              },
+            }))) : null,
+        ),
+
+        /* ══ ⑦.6 守护记录 ═══════════════════════════════════════════ */
+        guardOn ? h(Card, {
+          title: '守护记录',
+          desc: '扫到什么、判成什么、真发出去什么 —— 自动拿号说话，得能事后核对',
+        },
+          h('div', { 'data-bd-row-desc': '', style: { display: 'flex', gap: 12, alignItems: 'center' } },
+            h('span', {}, guardLog
+              ? `今天已回 ${guardLog?.daily?.count ?? 0} 条${guardLog?.dailyCap ? ` / 上限 ${guardLog.dailyCap}` : '（不限）'}`
+              : '还没读到记录'),
+            /* ⭐ 派出去但还没真发出去的（值班挂了/失败过），下一轮会自动补 —— 2026-10-22 用户实测要求能看见 */
+            guardLog && guardLog.pending > 0
+              ? h('span', { style: { color: '#b26a00' } }, `还有 ${guardLog.pending} 条没回出去，下一轮会补`)
+              : null,
+            h('button', {
+              'data-bd-btn': '', type: 'button', disabled: guardLogBusy,
+              onClick: loadGuardLog,
+            }, guardLogBusy ? '读取中…' : '刷新')),
+          h('div', { style: { marginTop: 8 } }, renderGuardLog())) : null,
+
         /* ══ ⑧ 检索与上下文 ════════════════════════════════════════════ */
         h(Card, { title: '检索与上下文', desc: '决定检索范围与采用的设定来源' },
           h(StackRow, {
@@ -1432,6 +1676,17 @@ window.__ModuleLoader__.load({
             'data-bd-textarea': '', rows: 4,
             placeholder: '每行一个关键词（留空 = 用内置那 5 组）',
             value: kws ?? '', onChange: (e) => setKws(e.target.value),
+          })),
+          h(StackRow, {
+            label: '值班跑在哪个目录',
+            desc: st.dutyCwd
+              ? `会话会出现在这个目录的会话列表里：${st.dutyCwd}`
+              : '留空 = 就用上面的工作区。会话是按目录分桶的 —— 想让它出现在你日常那个工作区的列表里，填那个目录（人设仍从工作区读）',
+          }, h('input', {
+            'data-bd-input': '', 'data-bd-w-full': '', value: dutyCwd ?? '',
+            placeholder: '留空 = 跟随工作区',
+            onChange: (e) => setDutyCwd(e.target.value),
+            onBlur: () => { patch({ dutyCwd: String(dutyCwd ?? '').trim() }, '值班跑在哪个目录') },
           })),
           h(StackRow, {
             label: '工作区路径',

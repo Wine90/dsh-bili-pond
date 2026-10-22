@@ -123,8 +123,45 @@ export const Config = !z ? undefined : z.object({
    * 关掉的话，值班只能用值班 profile 自己装的那几条。
    */
   reuseRoutes: z.boolean().default(true).extra('volatile', true),
+  /* ── 守护评论区（骑士团，2026-10-22） ──────────────────────────────
+   *  用**小号（骑士号）的登录态**去回被 @ 的评论：不是替大号管评论，
+   *  而是让这个号自己会说话 —— 所以不需要骑士团的删评/删弹幕权限 ✓
+   *  ⚠️ 默认全关：它会拿账号的嘴说话，必须使用者自己开。
+   *  ⚠️ 范围一律在 clampPatch 里钳，schema 不写 .max()（老坑：schema 校验不过 = 整条插件不激活）。
+   * ─────────────────────────────────────────────────────────────── */
+  /** 守护总开关 */
+  guardOn: z.boolean().default(false).extra('volatile', true),
+  /** 白名单 UID（逗号/空格分隔）。留空 = 只认「要 @ 谁」那个 UID。
+   *  ⭐ 2026-10-22 用户澄清：这条**只管别人视频下的 @**；大号自己视频的评论区不看白名单。 */
+  guardWhitelist: z.string().default('').extra('volatile', true),
+  /** 大号自己视频下：不用 @ 也回（真·守护）。关掉 = 退化成「只回白名单」 */
+  guardOwnAll: z.boolean().default(true).extra('volatile', true),
+  /** 每天最多回几条（跨所有视频合计，防一觉醒来刷 200 条 + 撞风控） */
+  guardDailyCap: z.natural().default(30).extra('volatile', true),
+  /** 守最近几条视频的评论区（1 = 只守最新一条；调大 = 请求量跟着涨） */
+  guardScope: z.natural().default(1).extra('volatile', true),
+  /** 每轮最多回几条 */
+  guardPerRound: z.natural().default(3).extra('volatile', true),
+  /** 多少分钟扫一次（@ 通知 + 评论区） */
+  guardPollMinutes: z.natural().default(3).extra('volatile', true),
+  /** 回复末尾带一个表情 */
+  guardEmoji: z.boolean().default(true).extra('volatile', true),
+  /** 守护口径：想让小号怎么说话 / 什么不能答（拼进每一轮提示词） */
+  guardTone: z.string().default('').extra('volatile', true),
+  /** 私信遥控：大号（mentionUid）给小号发「# 状态」这类私信，这边扫到就执行并回一条（默认关） */
+  dmCtlOn: z.boolean().default(false).extra('volatile', true),
+  /** 私信遥控的命令前缀（默认 #，别的私信一律不当命令） */
+  dmCtlPrefix: z.string().default('#').extra('volatile', true),
+  /** 多久扫一次私信（分钟） */
+  dmCtlPollMinutes: z.natural().default(5).extra('volatile', true),
+  /** 私信遥控每天最多回几条（0 = 不限） */
+  dmCtlDailyCap: z.natural().default(30).extra('volatile', true),
+  /** 私信里「# 问 …」每天最多起几轮（每一轮 = 一次 headless，要烧模型额度） */
+  dmCtlAskCap: z.natural().default(20).extra('volatile', true),
   /** 跑 headless 时的工作目录 */
   workspace: z.string().default('').extra('volatile', true),
+  /** 值班/私信轮**跑在哪个目录**（会话按 cwd 分桶，想让会话出现在你日常那个工作区的列表里就填它；留空 = 用工作区） */
+  dutyCwd: z.string().default('').extra('volatile', true),
   /** 日报形态：full=完整（现状）· brief=每条一两行 · off=不写报告（只发评论） */
   reportLevel: z.string().default('full').extra('volatile', true),
   /** 回复评论：默认关。开了之后只回「直接回复到它那条评论下面的人」 */
@@ -277,7 +314,9 @@ export function apply(ctx, config) {
     minDurationMin: 0, maxDurationMin: 60, preferSubtitle: true, subtitleProbeMax: 3,
     noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
     dmOn: false, dmMode: 'off', dmUid: 0,
-    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', dutyCwd: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    guardOn: false, guardWhitelist: '', guardOwnAll: true, guardDailyCap: 30, guardScope: 1, guardPerRound: 3, guardPollMinutes: 3, guardEmoji: true, guardTone: '',
+    dmCtlOn: false, dmCtlPrefix: '#', dmCtlPollMinutes: 5, dmCtlDailyCap: 30, dmCtlAskCap: 20,
   }
   const normalize = (src, base) => {
     const out = { ...base }
@@ -985,7 +1024,20 @@ export function apply(ctx, config) {
     t.unref?.()
   })
 
-  const promptFor = () => {
+  const promptFor = (why = 'window') => {
+    /* ⭐ 守护轮是**另一种任务**，不是「顺便把日常那套也做一遍」（2026-10-22 用户抓到）：
+     *    以前守护轮把整份章程都喂进去，模型（hy3）很听话地把日常那套也跑了 ——
+     *    搜视频、写推荐、发私信，用户一脸问号：「这个搜索一遍是从哪来的？我没手动也没开自动」。
+     *    ⇒ 守护轮只给守护任务：没有搜索、没有私信、没有公开评论、没有挑片。 */
+    if (why === 'guard') {
+      /* ⭐ 第一行会变成会话列表里的标题（2026-10-22 用户：值班轮也要进同一条对话） */
+      return `守护评论区：替我回几条评论。\n\n`
+        + `这是**守护评论区**的一轮：你只替主人回评论，别的事一件都不要做。\n`
+        + `🚫 不许按关键词搜视频、不许写推荐/挑片、不许发私信、不许发公开评论、不许发动态。\n`
+        + `✅ 只做一件事：把下面列出的这几条评论，各回一条（用 \`bili_reply\`）。\n`
+        + guardPromptPart()
+        + `\n最后用一句话汇报：回了哪几条（谁、回了什么），没回成的说清原因。`
+    }
     // ⭐ 章程取哪一份：家里那份优先（ensureCharter 保证铺好；他改过的话就是他那份，升级的事由 ensureCharter 记账处理）
     let duty = charterPath(pluginDir, stateDir)
     // ⭐ 2026-10-17（issue #8④）：章程里的 `<家目录>` 这种占位符会被模型读成 `~`，实测**整轮转写白跑** ✗
@@ -1041,7 +1093,9 @@ export function apply(ctx, config) {
     //    两个都开 = 评论 + 私信；工具层的闸用的是同一套判据。
     const commentOn = Boolean(cfg.autoComment && cfg.mentionName)
     const dmOn = Boolean(cfg.dmOn && Number(cfg.dmUid) > 0)
-    return `你是这个账号的 B站 助手。`
+    /* ⭐ 第一行会变成会话列表里的标题（2026-10-22 用户：「值班轮也进对话，不是新建」） */
+    return `值班：刷一轮 B站，挑值得我看的。\n\n`
+      + `你是这个账号的 B站 助手。`
       + `下面是使用者的设定（如果有）—— **按它来**，别用你默认那套人格。`
       + ownerDoc
       + (ownerDoc
@@ -1090,9 +1144,20 @@ export function apply(ctx, config) {
           : '**开着、但依赖没装好** ⇒ 这一轮没字幕的视频只能跳过')
         : '关着（没字幕的视频就跳过）'}；`
       + `⭐ 不管哪种情况，**报告里都要写一行「因无字幕跳过 N 条」**（N=0 也写）—— 别让它悄悄少几条。`
-      + `判重表 = ${join(stateDir, 'seen.md')}（**就是这个绝对路径**，别写成 ~ 下的路径、也别写到别处）；`
+      /* ⭐ 2026-10-22：这一轮跑在**工作区**里（会话才会出现在你的会话列表），
+       *    而工作区的沙箱只让写 cwd ⇒ 报告 / 判重表 / 归档都写不进去。
+       *    所以这三样改用 MCP 工具交（子进程代写，落在插件家目录里）。 */
+      + `\n\n===== 这一轮怎么交作业（重要）=====\n`
+      + `这一轮的工作目录是**工作区**，你**写不了**插件数据目录（` + stateDir + `）—— 别用写文件工具去试，会报 sandbox 拒绝。\n`
+      + `改用这三只工具（宿主提供，落在插件家目录里）：\n`
+      + `① 报告：\`bili_report_save(markdown)\` —— 整份报告正文一次交给它（覆盖写 out/<今天>.md）。\n`
+      + `② 判重表：\`bili_seen_read()\` 读、\`bili_seen_append(lines)\` 追加（一行一条）。\n`
+      + `③ 归档：\`bili_archive_append(lines)\` 追加（一行一条：日期 · BV · 标题 · UP · 一句话结论 · 链接）。\n`
+      + `===== 交作业说明结束 =====\n`
+      + `判重表 = ${join(stateDir, 'seen.md')}（路径给你看，**读写都走上面那两只工具**）；`
       + `⚠️ 它读不出来或写不进去，**必须在报告里明说** —— 那一轮宁可不发评论，也别当成"没有记录"重发一遍。`
       + `⭐ 另外把这一轮**看过的每一条视频（挑中的和跳过的都算）**追加进归档：${join(digestDir, `${dayKey().slice(0, 7)}.md`)}`
+      + `（用 \`bili_archive_append\`）`
       + ` —— 一行一条：日期 · BV 号 · 标题 · UP · 一句话结论 · 链接（跳过的那条在后面注明理由）；`
       + `这是**给以后检索用**的（报告是给人看的，归档是给"回头翻"用的），别省略、也别只写挑中的。`
       + `自动评论并 @ ${cfg.mentionName || '（还没填要 @ 谁）'}${cfg.mentionUid ? '（UID ' + Number(cfg.mentionUid) + '）' : ''} 是${commentOn
@@ -1119,6 +1184,8 @@ export function apply(ctx, config) {
       + (cfg.replyToComments
         ? `回复评论：开着（每轮最多回 ${Number(cfg.replyPerRound) || 1} 条）—— 只回「直接回复到你那条评论下面的人」，回完记进报告；找不到你那条评论就跳过，别硬找。`
         : `回复评论：关着（一个字都不要回任何人 —— 有人回复你那条评论也不要理）。`)
+      /* ── 守护评论区：这一轮的待回复清单（宿主扫好、内联进来） ── */
+      + guardPromptPart()
       + `最后用一句话汇报你挑到了什么。现在几点了自己看一眼系统时间。`
   }
 
@@ -1137,11 +1204,40 @@ export function apply(ctx, config) {
    *    mcp_server.py 那头**不在白名单里的工具根本不注册** —— 连名字都不给它看见 ✓。
    *    要读全就手工改这个列表（或者直接跑 mcp_server.py，不设这个变量 = 全放）。
    */
-  const mcpWhitelist = () => {
-    const list = ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info']
+  const mcpWhitelist = (why = 'window') => {
+    /* ⭐ 守护轮**只给守护要用的那几只**（2026-10-22 用户抓到「我没手动也没开自动，怎么搜了一遍视频」）：
+     *    那一轮本来只需要「看内容 → 回一条」，可整份章程喂进去之后模型顺手把日常流程也跑了
+     *    （搜视频、写推荐、发私信）⇒ 从工具这一层就把路掐掉：连 bili_search / bili_send_message
+     *    都不注册，它想跑日常也没有手 ✓ */
+    if (why === 'guard') {
+      return ['bili_guard_scan', 'bili_user_videos', 'bili_subtitle', 'bili_video_info', 'bili_reply']
+    }
+    /* ⭐ 私信遥控轮（2026-10-22）：**不给 bili_send_message** ——
+     *    实测让模型自己发，它会先回一句「已发给主人」然后什么都没发（它以为发了）；
+     *    回什么、发给谁、发几条，全部由宿主决定（宿主发完才写记录），模型只负责把话写出来。 */
+    if (why === 'dm') {
+      /* ⭐ 私信 = 跟 AI 聊天（用户 2026-10-22 澄清：不是「查询命令」，是对话入口）。
+       *    所以把 B站 的**读**能力全开给它：他发个视频链接过来，它得自己取字幕/简介再看。
+       *    🚫 依然不给写工具：bili_reply / bili_send_message / 上传 / 登录 —— 回信由宿主发，
+       *       免得它自己又发一遍，也免得一句「帮我回一下」就公开说话。 */
+      return ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info', 'bili_user_videos', 'bili_guard_scan']
+    }
+    /* ⭐ 值班轮跑在**工作区**里（2026-10-22 用户：「都搬进工作区哇，不然都要打开插件才能看到」），
+     *    而那一轮的沙箱只让写 cwd（workspace-write）⇒ 它写不了插件家目录里的
+     *    `out/` 报告、`seen.md` 判重表、归档 ✗（实测 `[sandbox: file access denied]`）。
+     *    ⇒ 这三件事改由 MCP 子进程代劳（子进程是宿主起的，不受那一轮的沙箱限制），
+     *      工具名刻意收窄：报告 / 判重表 / 归档各自一个，**不给通用文件工具** ✓ */
+    const list = ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info',
+      'bili_report_save', 'bili_seen_read', 'bili_seen_append', 'bili_archive_append']
     if (cfg.autoComment || cfg.replyToComments) list.push('bili_reply')   // 只有真要发评论才给这只
     // ⭐ 私信：开关打开才给这只
     if (cfg.dmOn) list.push('bili_send_message')
+    /* ⭐ 守护评论区（2026-10-22）：这一轮要「读内容 → 回一条」，所以三只都得给：
+     *    bili_guard_scan（宿主已经扫过、把待回复清单内联进提示词了，但允许它自己补扫一次）
+     *    bili_subtitle / bili_video_info（先看视频再说话，不许凭空编）
+     *    bili_reply（精确回到那条评论上）
+     *    取大号投稿用 bili_user_videos。 */
+    if (cfg.guardOn) list.push('bili_guard_scan', 'bili_user_videos', 'bili_reply')
     return list
   }
 
@@ -1149,15 +1245,20 @@ export function apply(ctx, config) {
    * ⭐ 值班那一轮用哪条模型线路 —— 设置页选的，这里只负责写进 overlay 的 agent-default-model。
    *    ⚠️ 两个都空 ⇒ 一个字都不写，完全跟随 headless 自己的默认模型
    *       （别人没装 buddy 也不会因为写了个不存在的线路而 NO_ADAPTER）。
-   *    ⚠️ provider 写了但 model 空 ⇒ 只覆盖 provider，model 用该线路自己的默认。
+   *    🔴 2026-10-22 实测踩到：`agent-default-model` 的 schema 里 **model 是必填**。
+   *       只写 provider 会让这个插件激活失败（`$.model missing required value`），
+   *       整个值班进程 exit 1 —— 所以「只选了线路、没选模型」时**宁可不写**，
+   *       这一轮跟随 profile 默认模型，也不能写出半条无效配置把值班打死。
    */
   const modelOverrideYml = () => {
     const prov = String(cfg.dutyProvider || '').trim()
     if (!prov) return []
     const model = String(cfg.dutyModel || '').trim()
-    const out = ['- id: agent-default-model', '  config:', '    provider: ' + prov]
-    if (model) out.push('    model: ' + model)
-    return out
+    if (!model) {
+      log(`线路选了 ${prov}，但没选具体模型 —— 这一轮跟随 profile 默认模型（不写 agent-default-model，避免配置无效）`)
+      return []
+    }
+    return ['- id: agent-default-model', '  config:', '    provider: ' + prov, '    model: ' + model]
   }
 
   /* ⭐⭐ 2026-10-21（用户反馈：「别的插件用户也在为这条发愁 —— 需要一个对所有人都好用的办法，
@@ -1288,7 +1389,7 @@ export function apply(ctx, config) {
     }
   }
 
-  const ensureOverlay = () => {
+  const ensureOverlay = (why = 'window') => {
     const file = join(stateDir, 'headless-overlay.yml')
     const script = join(stateDir, 'mcp_server.py')
     const posix = (p) => String(p).replace(/\\/g, '/')
@@ -1321,7 +1422,10 @@ export function apply(ctx, config) {
         '        args:',
         `          - '${posix(script)}'`,
         '        env:',
-        `          BILI_MCP_TOOLS: '${mcpWhitelist().join(',')}'`,
+        `          BILI_MCP_TOOLS: '${mcpWhitelist(why).join(',')}'`,
+        `          BILI_GUARD_LOG: '${posix(guardLogFile)}'`,
+        /* ⭐ 值班轮的「文件出口」要落在这个目录里（MCP 子进程不受那一轮沙箱限制） */
+        `          BILI_DUTY_HOME: '${posix(stateDir)}'`,
         '',
       )
     }
@@ -1417,6 +1521,21 @@ export function apply(ctx, config) {
     return null
   }
 
+  /**
+   * ⭐ 「值班/私信轮跑在哪个目录」（2026-10-22 用户：「不能直接显示吗？我工作区列表没有这个」）
+   *    会话是按 cwd 分桶的（`%DSH_HOME%/sessions/--D-harness--`），跑在哪个目录，会话就出现在
+   *    哪个工作区的列表里。他不想为了看会话去切工作区 ⇒ 单独给一个「跑在哪个目录」：
+   *      ① 填了且存在 → 用它 ② 没填 → 用「工作区」 ③ 都没有 → 插件家（stateDir）
+   *    ⚠️ 人设（AGENTS.md）仍然只从「工作区」读，跟跑在哪无关 —— 这两件事别再绑一起。
+   */
+  const runDir = () => {
+    const c = String(cfg.dutyCwd || '').trim()
+    if (c && existsSync(c)) return c
+    const w = String(cfg.workspace || '').trim()
+    if (w && existsSync(w)) return w
+    return stateDir
+  }
+
   const runDuty = (why = 'window') => {
    try {
     /* ⭐ 同一时间只允许一轮（2026-10-20）：按钮灰掉只是防手滑，
@@ -1433,15 +1552,37 @@ export function apply(ctx, config) {
     }
     refreshCfg()          // ⭐ 设置页刚改过的值要立刻生效（config 是就地改的，快照会过期）
     const dsh = resolveDsh()
-    const overlay = ensureOverlay()
+    const overlay = ensureOverlay(why)
     const args = [...dsh.args, '--profile', cfg.headlessProfile || 'headless']
     if (overlay) args.push('--patch', overlay)
-    args.push(promptFor())    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
+    /* ⭐ 值班轮**固定一条会话**（2026-10-22 用户：「值班轮也进对话，不是新建，不然怎么对话上下文啊」）：
+     *    第一轮跑完把 sessionId 记下来，之后每轮 `--session-id` 续同一条 ——
+     *    会话列表里始终只有那一条，模型也真的记得前几轮干了什么（不再每轮从零开始）。
+     *    ⚠️ 顺序：`--patch` 必须在 `--json` 之前（2026-10-22 实测：`--json` 后面的 `--patch` 会被拒，
+     *      报 `unknown option '--patch'`，整轮 3 秒就退）。 */
+    const dutySessFile = join(stateDir, 'duty-session.json')
+    let dutySess = ''
+    try {
+      const o = readJson(dutySessFile, {})
+      /* ⚠️ 只在**同一个目录**下复用：会话是按 cwd 分桶的，换了目录再拿旧 id 续会报错 */
+      if (String(o.cwd || '') === cwd) dutySess = String(o.sessionId || '')
+    } catch { dutySess = '' }
+    if (dutySess) args.push('--session-id', dutySess)
+    args.push('--json')
+    args.push(promptFor(why))    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
     // ⭐ 工作目录 = **插件家**：那一轮**被沙箱关着**，只写得了自己工作目录里的东西 ✗
     //    （2026-10-14 教训：为了让它读工作区里的 AGENTS.md 把 cwd 改成工作区 ⇒
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
     //      现在改成"设定由插件读进来、内联进提示词" ✓，cwd 回到插件家 ✓）
-    const cwd = stateDir
+    /* ⭐ 工作目录 = **使用者的工作区**（2026-10-22 用户：「都搬进工作区哇，不然都要打开插件才能看到」）：
+     *    会话是按 cwd 分桶的（`%DSH_HOME%/sessions/--D-harness-bili-dsh--`），跑在插件家里
+     *    那些会话在界面里根本翻不到。
+     *    ⚠️ 但工作区的沙箱只让写 cwd ⇒ 报告/判重表/归档写不进插件家目录，
+     *      所以这三样改由 MCP 工具代写（见 promptFor 里那段「怎么交作业」）。
+     *    ⭐ 2026-10-22 再加一层：「跑在哪个目录」单独可配（`dutyCwd`）——
+     *      人设仍从「工作区」读，跑的位置可以是他日常那个目录，两者不再绑死。
+     *    ⚠️ 都没配或不存在时退回插件家（老行为，报告照样能写）。 */
+    const cwd = runDir()
     log(`开跑（${why === 'manual' ? '手动' : why === 'noon' ? '中午' : why === 'night' ? '夜间' : why}）· 模型 ${cfg.dutyProvider || '跟随默认'}/${cfg.dutyModel || '默认'} · 本轮上限 ${Number(cfg.perRoundMax) || 0} 条`)
     const child = spawn(dsh.command, args, {
       cwd,
@@ -1462,8 +1603,29 @@ export function apply(ctx, config) {
      *    每轮开跑前先清空 ⇒ 这个文件永远只装**最近一轮**，不会越长越大。
      *    写不进去就丢：这里是 stream 回调，抛一次就把整个宿主带走。 */
     try { writeFileSync(runLogFile, '', 'utf8') } catch { /* 清不掉也无所谓，继续追加 */ }
+    let pickBuf = ''   // stdout 是按块来的，事件行可能被切断 ⇒ 先攒着，按 \n 切
     const pick = (buf) => {
-      try { appendFileSync(runLogFile, String(buf), 'utf8') } catch { /* 绝不能抛 */ }
+      const s = String(buf)
+      try { appendFileSync(runLogFile, s, 'utf8') } catch { /* 绝不能抛 */ }
+      /* ⭐ 顺手从事件流里捞 sessionId（第一轮才有），记下来供以后每轮续用。
+       *    这里是 stream 回调 —— 任何异常都会带走整个宿主，所以整段包住、逐行 try。 */
+      try {
+        pickBuf += s
+        const lines = pickBuf.split('\n')
+        pickBuf = lines.pop() || ''
+        for (const ln of lines) {
+          const t = ln.trim()
+          if (!t.startsWith('{')) continue
+          try {
+            const ev = JSON.parse(t)
+            if (ev && ev.type === 'session' && ev.sessionId && String(ev.sessionId) !== dutySess) {
+              dutySess = String(ev.sessionId)
+              try { writeJson(dutySessFile, { sessionId: dutySess, cwd, at: new Date().toISOString() }) } catch { /* 记不下来就下一轮再说 */ }
+              log(`值班会话固定为 ${dutySess}（以后每轮都接着这条）`)
+            }
+          } catch { /* 半行/非 JSON 行跳过 */ }
+        }
+      } catch { /* 绝不能抛 */ }
     }
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
@@ -1473,6 +1635,9 @@ export function apply(ctx, config) {
       const tookSec = Math.round((Date.now() - startedMs) / 1000)
       dutyRun = null
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
+      /* ⭐ 守护：这一轮的待回复清单用完就删 —— 留着的话下一轮会把同一批再塞进提示词，
+       *    模型就会重复回同一批人（seen 表只挡"再扫出来"，挡不住"清单还在"） */
+      try { rmSync(guardQueueFile, { force: true }) } catch { /* 删不掉也不影响这一轮 */ }
       rotateLogIfBig()            // ⭐ 日志别无声地长（三天 797KB ⇒ 一年约 100MB）
       /* ⭐ 结束事件带上"用时 + 挑中数 + 失败分类" —— 界面上直接能给一句人话，
        *    不用使用者自己去 duty.log 里翻。 */
@@ -1526,6 +1691,7 @@ export function apply(ctx, config) {
         return { started: false, why, error: chk.error, known: chk.known || [] }
       }
       if (chk.unchecked) log(`模型线路没能预检（${chk.why}）—— 照常开跑`)
+      if (chk.warn) log(chk.warn)
     } catch (e) {
       log(`模型预检出错（不拦，照常跑）：${e?.message ?? e}`)
     }
@@ -1654,6 +1820,747 @@ export function apply(ctx, config) {
     timer.unref?.()                                    // 别因为这个定时器让进程不肯退出
     ctx.effect(() => () => clearInterval(timer), 'bili-pond: 谷时定时器')
   } catch (e) { log(`定时器没起来：${e?.message ?? e}`) }
+
+  /* ═══════════════════════════════════════════════════════════════════
+   * 守护评论区（骑士团，2026-10-22）
+   *
+   * 要解决的事：使用者有个大号在发视频，想让**另一个号（骑士号）**替他盯着评论区 ——
+   *   白名单里的人 @ 这个号（或在大号视频下评论）时，自动回一条像人说的话。
+   *
+   * 为什么不用骑士团权限（删评/删弹幕）：那套要粉丝数 + 实名认证，而且是在替大号管别人；
+   *   这里要的是「这个号自己会说话」，只需要它自己的登录态 ⇒ 零门槛 ✓
+   *
+   * 两条输入（都只读，不改别人的东西）：
+   *   ① @ 通知：`bili_guard_scan` 里走 `session.get_at` 增量拉（水位 = at_cursor）
+   *   ② 评论区：大号最近 N 条视频按时间倒序翻页，只认白名单 UID
+   *
+   * 三道闸：白名单 UID（空 = 只认「要 @ 谁」那个）· 每轮条数上限 · 同一条评论只回一次（seen 表）
+   * ⚠️ 幂等是硬要求：重复回同一条 = 在人家评论区刷屏，比不回更糟。
+   * ⚠️ 定时器回调里绝不让异常外冒（2026-10-14 事故：未捕获异常杀掉整个宿主）。
+   * ═══════════════════════════════════════════════════════════════════ */
+  const guardStateFile = join(stateDir, 'guard-state.json')
+  const guardQueueFile = join(stateDir, 'guard-queue.json')
+  /* 守护记录：一行一条 JSON（jsonl）。**由两个进程写**：
+   *   宿主写「扫到了什么、判成什么」（scan / queue），MCP 子进程写「实际发出去了什么」（reply）。
+   *   为什么不靠模型自述：模型说「回了」不等于真发出去了，记录要能对得上 B站 那边的结果。 */
+  const guardLogFile = join(stateDir, 'guard-log.jsonl')
+  let guardLastAt = 0                    // 上次扫描的毫秒时间戳（轮询节流）
+  let guardLast = { at: 0, queued: 0, skipped: '', error: '' }
+
+  /** 当前守护配置（白名单解析 + 范围钳制都在这里，别在调用处再算一遍） */
+  const guardCfg = () => {
+    const wl = String(cfg.guardWhitelist || '')
+      .split(/[\s,，、;；]+/)
+      .map((s) => Number(String(s).trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    /* ⭐ 白名单留空 = 只认「要 @ 谁」那个 UID（多数人只关心自己一个人 @ 它） */
+    if (!wl.length && Number(cfg.mentionUid) > 0) wl.push(Number(cfg.mentionUid))
+    /* ⭐ 自己的 UID：用来跳过「自己回自己」（否则模型一回，下一轮又把自己的回复当成新评论） */
+    let selfUid = 0
+    try { selfUid = Number(readJson(join(stateDir, 'bili_credential.json'), {}).dedeuserid || 0) || 0 } catch { selfUid = 0 }
+    return {
+      on: cfg.guardOn === true,
+      whitelist: new Set(wl),
+      ownerUid: Number(cfg.mentionUid) || 0,          // 大号：守它的投稿
+      selfUid,                                        // 骑士号自己：跳过
+      ownAll: cfg.guardOwnAll !== false,              // 大号视频下不用 @ 也回
+      dailyCap: Math.max(0, Math.min(500, Number(cfg.guardDailyCap) || 0)),
+      scope: Math.max(1, Math.min(10, Number(cfg.guardScope) || 1)),
+      perRound: Math.max(1, Math.min(20, Number(cfg.guardPerRound) || 3)),
+      pollMs: Math.max(1, Math.min(240, Number(cfg.guardPollMinutes) || 3)) * 60_000,
+      emoji: cfg.guardEmoji !== false,
+    }
+  }
+
+  /* ── 「这条评论值不值得回」───────────────────────────────────────
+   * 用户 2026-10-22 定的口径：大号视频下**不用 @ 也回**，但「只回有内容的」——
+   * 纯水（哈哈哈/666/顶/前排/纯表情）和广告不回。为什么不回纯水：
+   *   一条热门视频下几十条「哈哈哈」全回，观感就是机器人，而且 B站 对高频回复有风控。
+   * 判据：剥掉 @前缀/表情/标点后剩多少「话」；不足 6 个字但有问号（提问）也算有内容。
+   * ──────────────────────────────────────────────────────────── */
+  const GUARD_JUNK = /^(哈+|6+|顶+|第一|前排|来了|打卡|好耶|太棒了|支持|赞+|牛+|沙发|马克|mark|围观|路过|水)+$/i
+  const GUARD_AD = /(加群|私信我|微信|vx|v信|qq群|代刷|互粉|互关|链接|https?:\/\/|www\.|淘|优惠券)/i
+  const worthReplying = (text) => {
+    if (typeof text !== 'string') return false      // 接口/老数据可能给 null/对象，别让 String() 把它们变成「有内容」
+    /* ⚠️ 2026-10-22 实测踩到：B站的 @ 文本**没有分隔符** —— 真实数据是
+     *    `@我的主人是吴彦祖总结这个视频`，昵称和正文粘在一起，按 `@\\S+` 剥会把正文一起吃掉
+     *    （实测「总结这个视频」被判成纯水跳过）。所以这里**不剥 @ 前缀**：
+     *    被 @ 到本身就说明有人想找你，字数判据对它天然成立。 */
+    const t = text
+    const core = t
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '')   // 表情
+      .replace(/[^\p{L}\p{N}?？!！,，.。~～]/gu, '')                              // 标点/空白
+      .trim()
+    if (!core) return false
+    if (GUARD_JUNK.test(core)) return false
+    if (GUARD_AD.test(t)) return false
+    const han = (core.match(/[\u4e00-\u9fa5]/g) || []).length
+    const len = core.length
+    if (/[?？]/.test(t)) return len >= 3                       // 提问：短也算
+    if (han >= 6 || len >= 8) return true                      // 有话说
+    return /(吗|呢|么|怎么|如何|为什么|求|请问|能不能|有没有|多少|哪个)/.test(t)
+  }
+
+  const readGuard = () => {
+    const d = readJson(guardStateFile, {})
+    const daily = (d.daily && typeof d.daily === 'object') ? d.daily : {}
+    return {
+      atId: Number(d.atId) || 0,
+      atTime: Number(d.atTime) || 0,
+      ctimes: (d.ctimes && typeof d.ctimes === 'object') ? d.ctimes : {},
+      seen: (d.seen && typeof d.seen === 'object') ? d.seen : {},
+      /* ⭐ 已派出去、但**还没真发出去**的那些（rpid → {at: 派发时间, n: 第几次尝试}）。
+       *    2026-10-22 用户实测：派发后值班进程 exit 1，一条都没发出去，
+       *    可水位已经推进、seen 也记了 ⇒ 那几条永远丢了。有这张表才能补回重试。 */
+      pending: (() => {
+        const out = {}
+        const raw = (d.pending && typeof d.pending === 'object') ? d.pending : {}
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === 'string') out[k] = { at: v, n: 1 }          // 兼容第一版的纯时间戳写法
+          else if (v && typeof v === 'object') out[k] = { at: String(v.at || new Date().toISOString()), n: Math.max(1, Number(v.n) || 1) }
+        }
+        return out
+      })(),
+      daily: { date: String(daily.date || ''), count: Number(daily.count) || 0 },
+    }
+  }
+
+  /**
+   * ⭐ 「今天已经回了几条」——**从守护记录里数真发出去的**（reply + ok:true），
+   *    不以「派出去几条」为准。2026-10-22 用户抓到：界面显示「今天已回 3 条」，
+   *    实际一条都没发出去（那次值班 exit 1）。计数必须能对账，否则这个数字就是骗人的。
+   */
+  const guardAnswered = () => {
+    const today = dayKey(new Date())
+    const all = new Set()
+    const todaySet = new Set()
+    for (const e of readGuardLog(500)) {
+      if (e?.type !== 'reply' || e.ok !== true) continue
+      const r = String(e.rpid || '')
+      if (!r) continue
+      all.add(r)
+      if (dayKey(new Date(Number(e.ts) || 0)) === today) todaySet.add(r)
+    }
+    return { all, today: todaySet }
+  }
+
+  /** seen 表只留最近 7 天、最多 800 条 —— 它是「别重复回」的台账，不是档案 */
+  const pruneSeen = (seen) => {
+    const cut = Date.now() - 7 * 86_400_000
+    const keep = Object.entries(seen)
+      .filter(([, iso]) => { const t = Date.parse(String(iso)); return Number.isFinite(t) && t >= cut })
+      .sort((a, b) => Date.parse(String(b[1])) - Date.parse(String(a[1])))
+      .slice(0, 800)
+    return Object.fromEntries(keep)
+  }
+
+  const saveGuard = (g) => {
+    try { writeJson(guardStateFile, g) } catch (e) { log(`守护：状态写不进去（这一轮的结果会重复，注意）：${e?.message ?? e}`) }
+  }
+
+  /** 往守护记录里追加一行（jsonl）。超过 400KB 就轮转一次，只留最近那份 + 上一份 */
+  const guardLogAppend = (entry) => {
+    try {
+      try { if (statSync(guardLogFile).size > 400_000) renameSync(guardLogFile, guardLogFile + '.1') } catch { /* 文件还不存在 */ }
+      appendFileSync(guardLogFile, JSON.stringify(entry) + '\n', 'utf8')
+    } catch (e) { log(`守护：记录写不进去（不影响回话）：${e?.message ?? e}`) }
+  }
+
+  /** 读最近 N 条（新的在前）；读坏了就当没有，别让记录把界面拖死 */
+  const readGuardLog = (limit = 50) => {
+    const out = []
+    for (const f of [guardLogFile + '.1', guardLogFile]) {
+      let text = ''
+      try { text = readFileSync(f, 'utf8') } catch { continue }
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        try { out.push(JSON.parse(line)) } catch { /* 半行（进程被 kill）跳过 */ }
+      }
+    }
+    out.sort((a, b) => (Number(b?.ts) || 0) - (Number(a?.ts) || 0))
+    return out.slice(0, Math.max(1, Math.min(500, limit)))
+  }
+
+  /**
+   * 扫一次（只扫、不回）：返回 { ok, queued, items, error }
+   * ⚠️ 水位**无论如何都推进**：否则同一批 @ 会被反复扫出来（评论区那边同理，按 ctime 推进）。
+   */
+  const guardScan = async () => {
+    const g = guardCfg()
+    if (!g.on) return { ok: false, skipped: 'off' }
+    if (!hasCredential()) return { ok: false, skipped: 'no-cred' }
+    /* ⭐ 白名单只在「不开大号视频全回」时才是硬门槛（2026-10-22 用户澄清：
+     *    大号视频下不用 @ 也回，所以那条路不需要白名单） */
+    if (!g.ownAll && !g.whitelist.size) return { ok: false, skipped: 'no-whitelist' }
+
+    const st = readGuard()
+
+    /* ⭐ 对账（2026-10-22 用户实测抓到的坑）：上一轮**派出去**的，只有真的在守护记录里
+     *    出现 `reply ok:true` 才算回过；没发出去的下轮接着回，不能因为「派过」就当成回过。
+     *    以前派发即记 seen + 水位同时推进 ⇒ 值班一挂，那几条就永远丢了。 */
+    const answered = guardAnswered()
+    for (const [rpid, p] of Object.entries(st.pending)) {
+      if (answered.all.has(rpid)) { st.seen[rpid] = p.at; delete st.pending[rpid] }
+    }
+    /* ⭐ 旧版本（1.3.0 早期）「派发即记 seen」留下的账：seen 里有、但守护记录里没有 ok 回执的，
+     *    说明当时根本没发出去 —— 把它们当成 pending 补回来（只回溯 2 天，别把陈年老账翻出来重发）。 */
+    const legacyCut = Date.now() - 2 * 86_400_000
+    for (const [rpid, iso] of Object.entries(st.seen)) {
+      if (answered.all.has(rpid) || st.pending[rpid]) continue
+      const t = Date.parse(String(iso))
+      if (!(t >= legacyCut)) continue
+      st.pending[rpid] = { at: String(iso), n: 1 }
+      delete st.seen[rpid]
+    }
+    /* ⭐ 上一轮没发出去的，捞回来重试（水位已经越过它们了，只能从状态里补）。
+     *    ⚠️ 2026-10-22 第二轮实测踩到：**不能靠 `guard-queue.json`** —— 提示词一构建清单就被删了，
+     *    值班挂了清单也没了，pending 里只剩个 rpid，于是「派 0 条」永远补不回来。
+     *    所以：① 派发时把条目细节一起存进 pending ② 老数据没有细节的，从守护记录的 queue 行还原。 */
+    let retry = []
+    if (Object.keys(st.pending).length) {
+      const logged = new Map()
+      for (const e of readGuardLog(200)) {
+        if (e?.type !== 'queue' || !e.rpid) continue
+        if (!logged.has(String(e.rpid))) logged.set(String(e.rpid), e)
+      }
+      for (const [rpid, p] of Object.entries(st.pending)) {
+        const it = p?.item || logged.get(rpid)
+        if (!it) { delete st.pending[rpid]; continue }   // 细节还原不出来就别占着重试位
+        retry.push({
+          kind: String(it.kind || 'comment'),
+          bvid: String(it.bvid || ''),
+          rpid: Number(it.rpid) || Number(rpid),
+          uid: Number(it.uid) || 0,
+          uname: String(it.uname || ''),
+          text: String(it.text || ''),
+        })
+      }
+    }
+
+    /* ① 守哪几条视频：大号自己的最近投稿（拿不到就只扫 @ 通道） */
+    let bvids = []
+    if (g.ownerUid > 0) {
+      try {
+        const uv = await call('bili_user_videos', { uid: g.ownerUid, pn: 1, ps: g.scope, order: 'pubdate' })
+        const list = Array.isArray(uv?.videos) ? uv.videos : (Array.isArray(uv) ? uv : [])
+        bvids = list.map((v) => String(v?.bvid || '')).filter(Boolean).slice(0, g.scope)
+      } catch (e) {
+        log(`守护：取大号投稿失败（这次只扫 @ 通道）：${e?.message ?? e}`)
+      }
+    }
+    const sinceCt = {}
+    for (const b of bvids) sinceCt[b] = Number(st.ctimes[b] || 0)
+
+    /* ② 扫 */
+    let scan = null
+    try {
+      scan = await call('bili_guard_scan', {
+        bvids,
+        since_at_id: st.atId || 0,
+        since_at_time: st.atTime || 0,
+        since_ctimes: sinceCt,
+        max_pages: 3,
+      }, { timeoutMs: 150_000 })
+    } catch (e) {
+      const err = String(e?.message ?? e)
+      guardLast = { at: Date.now(), queued: 0, skipped: '', error: err }
+      return { ok: false, error: err }
+    }
+    const ats = Array.isArray(scan?.at) ? scan.at : []
+    const cms = Array.isArray(scan?.comments) ? scan.comments : []
+
+    /* ③ 过滤：白名单 + 别回自己 + 别重复 */
+    const fresh = []
+    /* ⭐ 跨通道去重（2026-10-22 实测踩到）：白名单的人 @ 这个号的那条评论，**本身也是**大号视频下的
+     *    顶层评论 ⇒ @ 通道和评论通道会给出同一个 rpid。不在这里按 rpid 去重，同一轮就会回两次。 */
+    const seenRpid = new Set()
+    const skip = { junk: 0, owner: 0, seen: 0, wl: 0 }   // 只为了记进日志：为什么这条没回
+    for (const it of ats) {
+      const uid = Number(it?.uid || 0)
+      const rpid = Number(it?.rpid || 0)
+      if (!uid || !rpid) continue
+      if (!g.whitelist.has(uid)) { skip.wl++; continue }
+      if (g.selfUid && uid === g.selfUid) { skip.owner++; continue }
+      if (st.seen[String(rpid)] || seenRpid.has(rpid)) { skip.seen++; continue }
+      seenRpid.add(rpid)
+      fresh.push({
+        kind: 'at', uid, rpid,
+        uname: String(it?.uname || ''), bvid: String(it?.bvid || ''),
+        title: String(it?.title || ''), text: String(it?.text || ''),
+        ctime: Number(it?.at_time || 0),
+      })
+    }
+    for (const c of cms) {
+      const uid = Number(c?.uid || 0)
+      const rpid = Number(c?.rpid || 0)
+      if (!uid || !rpid) continue
+      /* ⭐ 大号自己发的评论不用替他回（2026-10-22 实测：他自己在评论区补充技术细节，
+       *    小号再去接一句就很怪）。他要是 @ 了小号，走 @ 通道，那边照回。 */
+      if (g.ownerUid && uid === g.ownerUid) { skip.owner++; continue }
+      /* ⭐ 大号自己的视频下（comments 通道扫的就是大号投稿）：
+       *    ownAll 时**不看白名单**，但只回「有内容的」；关掉 ownAll 就退回白名单口径。 */
+      if (g.ownAll) {
+        if (!worthReplying(c?.text)) { skip.junk++; continue }
+      } else if (!g.whitelist.has(uid)) { skip.wl++; continue }
+      if (g.selfUid && uid === g.selfUid) { skip.owner++; continue }
+      if (st.seen[String(rpid)] || seenRpid.has(rpid)) { skip.seen++; continue }
+      seenRpid.add(rpid)
+      fresh.push({
+        kind: 'comment', uid, rpid,
+        uname: String(c?.uname || ''), bvid: String(c?.bvid || ''),
+        title: '', text: String(c?.text || ''),
+        ctime: Number(c?.ctime || 0),
+      })
+    }
+
+    /* ④ 推进水位（即使这一轮没东西可回也要推，否则下次还扫同一批） */
+    const cur = scan?.at_cursor || {}
+    const ctimes = { ...st.ctimes }
+    for (const c of cms) {
+      const b = String(c?.bvid || '')
+      const t = Number(c?.ctime || 0)
+      if (b && t > Number(ctimes[b] || 0)) ctimes[b] = t
+    }
+    const nextAtId = Math.max(st.atId || 0, Number(cur.id) || 0)
+    const nextAtTime = Math.max(st.atTime || 0, Number(cur.time) || 0)
+
+    /* ⑤ 取前 N 条入队。**派发只记 pending，不记 seen** —— 只有真发出去（守护记录里 ok:true）
+     *    才算回过；没发出去的下一轮从清单里捞回来重试（见上面那段对账）。 */
+    /* ⭐ 每日硬上限（用户 2026-10-22：「可以设置啊」）：跨所有视频合计，防止一觉醒来刷几百条。
+     *    计数以「真发出去」为准（guardAnswered），不以「派出去」为准。 */
+    const today = dayKey(new Date())
+    const daily = { date: today, count: answered.today.size }
+    const room = g.dailyCap > 0 ? Math.max(0, g.dailyCap - daily.count) : Infinity
+    /* 重试的排前面：它们已经等过一轮了；同一 rpid 试满 3 次还发不出去就放弃（评论删了/权限没了，别死循环） */
+    const MAX_TRY = 3
+    const ordered = []
+    const usedRpid = new Set()
+    let gaveUp = 0
+    for (const it of [...retry, ...fresh]) {
+      const k = String(it?.rpid || '')
+      if (!k || usedRpid.has(k)) continue
+      const p = st.pending[k]
+      if (p && p.n >= MAX_TRY) { delete st.pending[k]; gaveUp++; continue }
+      usedRpid.add(k)
+      ordered.push(it)
+    }
+    const take = ordered.slice(0, Math.min(g.perRound, room))
+    const nowIso = new Date().toISOString()
+    for (const t of take) {
+      const k = String(t.rpid)
+      const p = st.pending[k]
+      /* 条目细节跟着 pending 一起存：清单文件会被提示词构建删掉，挂了就只剩这个能还原 */
+      st.pending[k] = {
+        at: nowIso, n: (p?.n || 0) + 1,
+        item: { kind: t.kind, bvid: t.bvid, rpid: t.rpid, uid: t.uid, uname: t.uname, text: String(t.text || '').slice(0, 300) },
+      }
+    }
+    /* pending 只留 2 天：再老的回不动了，别一直占着重试位 */
+    const pendCut = Date.now() - 2 * 86_400_000
+    for (const [rpid, p] of Object.entries(st.pending)) {
+      if (Date.parse(String(p?.at)) < pendCut) delete st.pending[rpid]
+    }
+    if (gaveUp) log(`守护：${gaveUp} 条试了 ${MAX_TRY} 次都没发出去，放弃（可能评论被删/权限变了）`)
+    saveGuard({ atId: nextAtId, atTime: nextAtTime, ctimes, seen: pruneSeen(st.seen), pending: st.pending, daily })
+
+    /* ⑥ 记录：扫了什么、为什么跳过、哪些派出去回了（界面「守护记录」读的就是这份） */
+    guardLogAppend({
+      ts: Date.now(), type: 'scan', bvids,
+      scanned: { at: ats.length, comments: cms.length },
+      queued: take.length, skip,
+      daily: { date: daily.date, count: daily.count, cap: g.dailyCap },
+    })
+    for (const t of take) {
+      guardLogAppend({
+        ts: Date.now(), type: 'queue', kind: t.kind, bvid: t.bvid, rpid: t.rpid,
+        uid: t.uid, uname: t.uname, text: String(t.text || '').slice(0, 300),
+      })
+    }
+
+    guardLast = { at: Date.now(), queued: take.length, skipped: room === 0 ? 'daily-cap' : '', error: '' }
+    if (!take.length) {
+      if (room === 0) log(`守护：今天的额度用完了（上限 ${g.dailyCap} 条），明天再回`)
+      return { ok: true, queued: 0, skipped: room === 0 ? 'daily-cap' : '', daily: { date: daily.date, count: daily.count, cap: g.dailyCap }, scanned: { at: ats.length, comments: cms.length } }
+    }
+
+    try {
+      writeJson(guardQueueFile, { at: nowIso, items: take })
+    } catch (e) {
+      return { ok: false, error: `待回复清单写不进去：${e?.message ?? e}` }
+    }
+    return { ok: true, queued: take.length, items: take, daily: { date: daily.date, count: daily.count, cap: g.dailyCap }, scanned: { at: ats.length, comments: cms.length } }
+  }
+
+  /** 提示词里那段「这一轮有 N 条等着你回」——队列空了就一个字都不加 */
+  const guardPromptPart = () => {
+    if (cfg.guardOn !== true) return ''
+    let items = []
+    try { const q = readJson(guardQueueFile, {}); items = Array.isArray(q?.items) ? q.items : [] } catch { items = [] }
+    if (!items.length) return ''
+    const emojiRule = cfg.guardEmoji !== false
+      ? '末尾加**一个**贴切的表情（一个就够，别堆）。'
+      : '别加表情，就写干净的话。'
+    /* 守护口径：用户写几句「我是谁 / 能答什么 / 什么不能答」，比逐条视频描述管用得多 */
+    const tone = String(cfg.guardTone || '').trim()
+    return `\n\n===== 守护评论区：这一轮有 ${items.length} 条等着你回 =====\n`
+      + `你是**这个号本人**（不是大号）。主人这会儿没空看评论，你替他回。**每条都要回一条**，用 \`bili_reply\` 精确回到他那条评论上：\n`
+      + items.map((it, i) => `${i + 1}. [${it.kind === 'at' ? '@ 通知' : '评论区'}] ${it.uname}（UID ${it.uid}）· 视频 ${it.bvid}`
+        + (it.title ? `《${String(it.title).slice(0, 60)}》` : '')
+        + `\n   他说：${String(it.text || '').slice(0, 300)}\n   rpid=${it.rpid}`).join('\n')
+      + (tone ? `\n\n主人的口径（照这个说话，别越界；跟这条冲突就以这条为准）：\n${tone}\n` : '')
+      + `\n\n怎么回：\n`
+      + `① 先看内容：\`bili_subtitle\` 拿字幕；没字幕就只看标题+简介，**别凭空编视频里没有的东西**。\n`
+      + `   （「他说」里开头的 \`@某某\` 是 @ 人留下的前缀，不是他要说的话，忽略它。）\n`
+      + `② 他给了指令（比如「总结这个视频」）就照做；只是 @ 你一下就简短回应，别硬凑。\n`
+      + `③ **开一句说明你是代回**（用户 2026-10-22 定的口径）—— 比如「主人这会儿在忙，我先替他回一句」；`
+      + `但别每条都用同一个句式，换着说，别像模板。\n`
+      + `④ 一条 1–3 句、**120 字以内**，像人说话，别写成报告。${emojiRule}\n`
+      + `⑤ **必须带 rpid**：\`bili_reply(bvid="<上面的 BV 号>", text="...", rpid=<上面的 rpid>)\` —— 不带就是新开一条评论，等于答错地方。\n`
+      + `⑥ 每条只回一次；某条回不出去（风控/被删）就记进报告，**别重试刷屏**。\n`
+      + `===== 守护任务结束 =====\n`
+  }
+
+  let guardBusy = false
+  const guardTick = async () => {
+    if (guardBusy) return
+    guardBusy = true
+    try {
+      refreshCfg()
+      const g = guardCfg()
+      if (!g.on) return
+      if (Date.now() - guardLastAt < g.pollMs) return     // 没到点
+      guardLastAt = Date.now()
+      if (dutyRun) { log('守护：上一轮还在跑，这次先不扫'); return }
+      const r = await guardScan()
+      if (r?.queued > 0) {
+        log(`守护：扫到 ${r.queued} 条待回复（${r.items.map((i) => i.uname || i.uid).join('、')}）`)
+        const rr = await runDutySafe('guard')
+        if (rr && rr.started === false) log(`守护那一轮没跑成：${rr.error || '未知原因'}`)
+      } else if (r && r.error) {
+        log(`守护：这次没扫成（${r.error}）`)
+      }
+    } catch (e) {
+      log(`守护这一跳出错（已兜住，不影响宿主）：${e?.stack ?? e}`)
+    } finally { guardBusy = false }
+  }
+
+  try {
+    /* ⭐ 用 60 秒一跳去「看时间到没到」而不是直接把间隔设成 pollMs：
+     *    使用者在设置页改「几分钟扫一次」时，不用重启宿主就能生效 ✓ */
+    const gt = setInterval(() => { guardTick().catch((e) => log(`守护定时器异常：${e?.message ?? e}`)) }, 60_000)
+    gt.unref?.()
+    ctx.effect(() => () => clearInterval(gt), 'bili-pond: 守护定时器')
+  } catch (e) { log(`守护定时器没起来：${e?.message ?? e}`) }
+
+  /* ─────────────── 私信遥控（2026-10-22 用户的想法）───────────────
+   * 主人在手机上给这个小号发一条 `# 状态`，这边扫到就执行、再私信回一条。
+   * 第一版**只做只读命令**（状态 / 记录 / 帮助）：私信能控制电脑这件事，
+   * 先把通道验通、再放写操作 —— 出错代价比回错一条评论大得多。
+   * 闸门：① 只认 owner UID（大号）② 只认 # 前缀 ③ 按 msg_key 去重
+   *      ④ 每日条数上限 ⑤ 只处理 24 小时内的消息（第一次打开不会把历史私信全执行一遍）
+   */
+  const dmStateFile = join(stateDir, 'dm-state.json')
+  const dmCfg = () => {
+    const owner = Number(cfg.mentionUid) || 0
+    return {
+      on: cfg.dmCtlOn === true && owner > 0,
+      owner,
+      prefix: String(cfg.dmCtlPrefix || '#').trim() || '#',
+      pollMs: Math.max(1, Math.min(240, Number(cfg.dmCtlPollMinutes) || 5)) * 60_000,
+      dailyCap: Math.max(0, Math.min(500, Number(cfg.dmCtlDailyCap ?? 30))),
+      askCap: Math.max(0, Math.min(200, Number(cfg.dmCtlAskCap ?? 20))),
+    }
+  }
+  const readDm = () => {
+    const d = readJson(dmStateFile, {})
+    const daily = (d.daily && typeof d.daily === 'object') ? d.daily : {}
+    const ask = (d.ask && typeof d.ask === 'object') ? d.ask : {}
+    return {
+      lastTs: Number(d.lastTs) || 0,
+      keys: (d.keys && typeof d.keys === 'object') ? d.keys : {},
+      daily: { date: String(daily.date || ''), count: Number(daily.count) || 0 },
+      /* 「# 问 …」那条会话：固定 id 续着用，别在会话列表里刷一堆 */
+      sessionId: String(d.sessionId || ''),
+      /* 热窗口：扫到过消息后 10 分钟内改成 20 秒一拉（自适应节奏） */
+      hotUntil: Number(d.hotUntil) || 0,
+      ask: { date: String(ask.date || ''), count: Number(ask.count) || 0 },
+    }
+  }
+  const saveDm = (s) => {
+    try { writeJson(dmStateFile, s) } catch (e) { log(`私信遥控：状态写不进去：${e?.message ?? e}`) }
+  }
+
+  /* ⭐ 2026-10-22 用户澄清后重写：这里**不是命令表**，是「跟我聊天」的说明书 ——
+   *    他能发视频链接让我分析、能问本地情况、能接着上一句聊。 */
+  const dmHelpText = (p) => '私信这边就是跟我聊天：\n'
+    + `直接发消息就行，前缀 ${p} 可写可不写（写了当标点，没写也认）。\n`
+    + '· 甩个视频链接 / BV 号 —— 我去取字幕和简介，看完再跟你说\n'
+    + '· 问我这边的情况 —— 「今天回了多少」「守护开着吗」「最近回了谁」\n'
+    + '· 让我查/找 —— 搜 B站、翻某个 UP 的投稿、看某条视频的评论\n'
+    + `· ${p} 帮助 —— 这条\n`
+    + '只认你本人（大号）发的；别人发什么都不理。\n'
+    + '每条消息都会起一轮（视频分析可能等一两分钟，我先回你一句「收到」），'
+    + '全部进同一条会话，翻会话就能看到完整聊天记录。\n'
+    + '⚠️ 别在私信里发密码/密钥 —— B站私信不加密，存在他们服务器上。'
+
+  const dmStatusText = () => {
+    const answered = guardAnswered()
+    const g = guardCfg()
+    const pend = Object.keys(readGuard().pending).length
+    const last = guardLast?.at ? new Date(guardLast.at).toLocaleTimeString('zh-CN', { hour12: false }) : '还没跑过'
+    return `今天已回 ${answered.today.size} 条${g.dailyCap ? `（上限 ${g.dailyCap}）` : '（不限）'}`
+      + `\n还有 ${pend} 条没回出去，下一轮补`
+      + `\n守护：${g.on ? '开着' : '关着'} · 每轮最多回 ${g.perRound} 条`
+      + `\n上一轮：${last}`
+  }
+
+  const dmLogText = (n = 5) => {
+    const items = readGuardLog(60).slice(0, n)
+    if (!items.length) return '还没有守护记录。'
+    return items.map((e) => {
+      const t = new Date(Number(e.ts) || 0).toLocaleTimeString('zh-CN', { hour12: false })
+      if (e.type === 'scan') return `${t} 扫 @${e.scanned?.at ?? 0} / 评论 ${e.scanned?.comments ?? 0} → 派 ${e.queued ?? 0} 条`
+      if (e.type === 'queue') return `${t} 待回 ${e.uname || e.uid}：${String(e.text || '').slice(0, 24)}`
+      if (e.type === 'reply') return `${t} ${e.ok ? '回了' : '没回成'} ${String(e.uname || e.uid || '')}`
+      if (e.type === 'dm') return `${t} 私信命令：${String(e.cmd || '').slice(0, 24)}`
+      return `${t} ${e.type}`
+    }).join('\n')
+  }
+
+  /** 纯解析：一条私信 → 该回什么（**前缀可选**：2026-10-22 用户定「不用 #，当聊天」） */
+  const dmAnswer = (text) => {
+    const { prefix } = dmCfg()
+    const raw = String(text || '').trim()
+    if (!raw) return ''
+    /* 前缀可写可不写：写了就剥掉，没写就整条当命令/聊天 */
+    const body = raw.startsWith(prefix) ? raw.slice(prefix.length).trim() : raw
+    if (!body) return ''
+    const cmd = body.toLowerCase()
+    if (/^(状态|status|s)$/.test(cmd)) return dmStatusText()
+    if (/^(记录|log|logs)$/.test(cmd)) return dmLogText(5)
+    if (/^(帮助|help|\?|？)$/.test(cmd)) return dmHelpText(prefix)
+    /* ⭐ 不再回「这条还不认识」（2026-10-22 用户实测：模型轮失败时兜底甩了这句，像机器人）。
+     *    现在兜底只负责「状态/记录/帮助」这类本地能答的；别的返回空 ⇒ 上层用「这轮没跑成」的话术。 */
+    return ''
+  }
+
+  /**
+   * 「# 问 …」：真起一轮 headless 去干活（约 10 秒），把最终答复拿回来。
+   * 为什么用 `--json`：能同时拿到 ① 这条会话的 sessionId（下次 `--session-id` 续上）
+   *   ② `final` 事件里的正文（纯文本模式也行，但那样拿不到会话 id）。
+   * 为什么固定一个会话：否则每问一句就在会话列表里留一条新会话，问几次就刷满一屏。
+   */
+  /**
+   * 拼给模型看的「宿主实时数据」——命令轮的回答只能引用这里，别让它编。
+   * ⭐ 2026-10-22 用户定的口径：所有私信命令都进同一条会话（面板没人盯，会话才是能翻的记录），
+   *    所以状态/记录/帮助这些原本宿主自己就能拼的答案，现在也交给模型「说出来」，
+   *    但**数字必须来自这里**，不许它自己编。
+   */
+  const dmContext = () => {
+    const parts = []
+    try { parts.push(dmStatusText()) } catch { /* 状态拼不出来就少一段 */ }
+    try { parts.push(dmLogText(5)) } catch { /* 记录读不到就只给状态 */ }
+    try { parts.push(dmHelpText(String(cfg.dmCtlPrefix || '#'))) } catch { /* 帮助拼不出来也无妨 */ }
+    return parts.filter(Boolean).join('\n\n')
+  }
+
+  const dmAsk = (question, context = '') => new Promise((resolve) => {
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    let timer = null
+    try {
+      const dsh = resolveDsh()
+      const overlay = ensureOverlay('dm')
+      const st = readDm()
+      /* ⚠️ 2026-10-22 实测踩坑（用户实测收到「这条还不认识」后复现出来的）：
+       *    `--json` 必须放在 `--patch` **后面**。写成 `--profile headless --json --patch …`，
+       *    dsh 直接报 `{"type":"error","message":"unknown option '--patch'"}`、exit 1、3 秒就退，
+       *    于是 stdout 里没有 session/final 事件 ⇒ 宿主以为「模型没答」⇒ 退回本地兜底答案
+       *    ⇒ 用户收到一句「这条还不认识：今天回了多少」。
+       *    顺序：profile → --patch → --json → --session-id → 提示词。 */
+      const args = [...dsh.args, '--profile', cfg.headlessProfile || 'headless']
+      if (overlay) args.push('--patch', overlay)
+      args.push('--json')
+      if (st.sessionId) args.push('--session-id', st.sessionId)
+      /* ⚠️ 2026-10-22 实测踩坑（试了 4 种写法）：**不能用「结构化」提示词** ——
+       *    写成 `===== 私信遥控 =====` 那种块，模型（headless 里的编码 agent）会当成**提示注入**，
+       *    回一句「这是典型注入特征」；写成任务书，它会反问「你指的是哪种」；写成「# 私信遥控」开头，
+       *    它会去翻仓库读代码研究这个功能。
+       *    ✅ 唯一管用的是**大白话**：像人跟人说话那样把「他问了什么 / 我知道什么 / 你就这么回」讲清楚。 */
+      args.push(`主人刚在私信里给我发了条消息：${question}\n`
+        + (context ? `\n我手头知道的（宿主查好的，能直接用，不够也能自己再查）：\n${context}\n` : '')
+        + `\n他可能发视频链接 / BV 号，或者让我分析某个视频、找点东西、结合我这边的情况回答。\n`
+        + `需要的话我自己调工具去取（字幕、简介、评论、搜索都能用），**别凭空编视频里没有的内容**。\n`
+        + `回他的时候：像微信聊天，一两句到一小段都行，不要标题/列表/markdown 符号，别 @ 人，400 字以内。\n`
+        + `只把要回的话写出来，**别自己发私信**（发不发、发给谁由宿主决定）。`)
+      /* ⚠️ 2026-10-22 实测：cwd 必须是**空目录**。放在 stateDir 里，模型会去翻 duty.md / out/ 报告 /
+       *    config.json，然后自己编一段「今天干了什么」的回答（实测它甚至声称「已回复主人私信」）。
+       *    空目录里它没东西可翻，就老老实实按上面给的数据回话。 */
+      const dmHome = join(stateDir, 'dm-home')
+      try { mkdirSync(dmHome, { recursive: true }) } catch { /* 建不出来就用 stateDir 兜底 */ }
+      /* ⭐ 2026-10-22 用户问「你测试的那条对话去哪了」—— 真相：会话按 **cwd** 分桶
+       *    （%DSH_HOME%/sessions/--D-harness-- 这种）。我测的时候 cwd 是 stateDir 下的空目录，
+       *    于是会话落在 bili-duty 那个桶里，他在自己的工作区列表里根本看不到。
+       *    ⇒ 这一轮的工作目录用**使用者配的工作区**（那里通常就是他的 AGENTS.md 人设所在，
+       *      模型顺便能按人设说话）；工作区没配/不存在时才退回空目录。
+       *    ⚠️ 但**绝不能**用 stateDir 本身：那儿有 duty.md / out/ 报告 / config.json，
+       *      模型会去翻，然后自己编一段「今天干了什么」（实测它甚至声称「已回复主人私信」）。 */
+      /* ⭐ 2026-10-22：「跑在哪个目录」跟值班轮共用同一套（runDir），人设仍从工作区读。 */
+      const cwdDir = runDir()
+      const child = spawn(dsh.command, args, {
+        cwd: cwdDir, shell: dsh.shell, windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: pyEnv({ BILI_DUTY_HOME: stateDir, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }),
+      })
+      let acc = ''
+      let errAcc = ''
+      let finalText = ''
+      let sid = ''
+      const onLine = (line) => {
+        if (!line.trim()) return
+        let ev = null
+        try { ev = JSON.parse(line) } catch { return }
+        if (ev?.type === 'session' && ev.sessionId) sid = String(ev.sessionId)
+        if (ev?.type === 'final' && typeof ev.text === 'string') finalText = ev.text
+      }
+      child.stdout?.on('data', (b) => {
+        acc += String(b)
+        const lines = acc.split('\n')
+        acc = lines.pop() ?? ''
+        for (const l of lines) onLine(l)
+      })
+      /* stderr 留着只为诊断（私信正文不用它）：失败时把尾巴写进 duty.log，别让「这一轮为什么没答」没处查 */
+      child.stderr?.on('data', (b) => { errAcc = (errAcc + String(b)).slice(-600) })
+      timer = setTimeout(() => {
+        try { child.kill() } catch { /* 无妨 */ }
+        finish({ text: '', error: '超时（300 秒没答完）' })
+      }, 300_000)
+      timer.unref?.()
+      child.on('error', (e) => { if (timer) clearTimeout(timer); finish({ text: '', error: `起不来：${e?.message ?? e}` }) })
+      child.on('exit', (code) => {
+        if (timer) clearTimeout(timer)
+        if (acc.trim()) onLine(acc)
+        if (sid) { try { const s = readDm(); s.sessionId = sid; saveDm(s) } catch { /* 记不住就算了 */ } }
+        const text = String(finalText || '').trim()
+        if (!text) {
+          /* ⭐ 没拿到答复必须留下证据（2026-10-22：用户只看到一句「这条还不认识」，日志里什么都没有） */
+          const tail = (errAcc || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+          log(`私信遥控：这一轮没跑成（exit=${code}）${tail || 'stdout 里没有 final 事件'}`)
+        }
+        finish({ text, sessionId: sid, error: text ? '' : `这一轮没答出来（exit=${code}）` })
+      })
+    } catch (e) {
+      if (timer) clearTimeout(timer)
+      finish({ text: '', error: String(e?.message ?? e) })
+    }
+  })
+
+  let dmBusy = false
+  let dmLastAt = 0
+  /* ⭐ 自适应节奏（用户 2026-10-22 选）：B站 没给第三方留私信推送，只能轮询。
+   *    闲时按设置（默认 5 分钟）拉；一旦扫到过消息，接下来 10 分钟改成 20 秒一拉
+   *    —— 聊天时几乎即时，闲时又不白拉（每小时 12 次 vs 180 次）。
+   *    热窗口记在 dm-state.json 的 hotUntil 里：重启宿主也不会丢。 */
+  const DM_HOT_MS = 20_000
+  const DM_HOT_WINDOW = 10 * 60_000
+  const dmTick = async () => {
+    if (dmBusy) return
+    const c = dmCfg()
+    if (!c.on) return
+    const st0 = readDm()
+    const hot = Number(st0.hotUntil || 0) > Date.now()
+    const gap = hot ? Math.min(c.pollMs, DM_HOT_MS) : c.pollMs
+    if (Date.now() - dmLastAt < gap) return
+    dmBusy = true
+    dmLastAt = Date.now()
+    try {
+      if (!hasCredential()) return
+      const st = readDm()
+      const first = !st.lastTs
+      const r = await call('bili_dm_inbox', { uid: c.owner, limit: 20 })
+      if (!r?.ok) { log(`私信遥控：读私信失败（${r?.error || '未知原因'}）`); return }
+      const items = Array.isArray(r.items) ? r.items : []
+      const now = Date.now()
+      const cut = now - 24 * 3600_000
+      const baseline = now - 120_000        // 第一次打开：2 分钟前的都当历史，不执行
+      let handled = 0
+      for (const it of items) {
+        const key = String(it?.key || '')
+        if (!key || st.keys[key]) continue
+        const ts = Number(it?.ts || 0) * 1000
+        const text = String(it?.text || '')
+        if (String(it?.dir || '') !== 'in') { st.keys[key] = ts || now; continue }   // 自己发出去的不算
+        st.hotUntil = now + DM_HOT_WINDOW      // 有人跟我说话 ⇒ 接下来 10 分钟加密扫描
+        if (ts < cut || (first && ts < baseline)) { st.keys[key] = ts || now; continue }
+        const raw = String(text || '').trim()
+        /* ⭐ 前缀可选（2026-10-22 用户定：「不用 #，当聊天」）—— 写了就剥掉，没写就整条当命令/聊天。
+         *    安全边界不靠前缀：只认 owner UID（大号）发来的，别人发什么都不理。 */
+        const cmdText = raw.startsWith(c.prefix) ? raw.slice(c.prefix.length).trim() : raw
+        if (!cmdText) { st.keys[key] = ts || now; continue }
+        let reply = ''
+        /* 空格可有可无：`问 …` 和 `问…` 都认（后者正文至少 4 个字，免得「问题」这种被当成提问） */
+        const mAsk = /^(问|ask|q)\s+([\s\S]+)$/i.exec(cmdText)
+          || /^(问|ask|q)([\s\S]{4,})$/i.exec(cmdText)
+        const isAsk = Boolean(mAsk)
+        const today0 = dayKey(new Date())
+        /* ⭐ 2026-10-22 改成「所有私信都起一轮」之后，两条额度都得**在起轮之前**判 ——
+         *    否则先把模型轮烧了，再发现今天额度用完、把结果丢掉（白烧）。 */
+        const rounds = st.ask?.date === today0 ? st.ask : { date: today0, count: 0 }
+        const todayA = dayKey(new Date())
+        const dailyA = st.daily?.date === todayA ? st.daily : { date: todayA, count: 0 }
+        if (c.dailyCap > 0 && dailyA.count >= c.dailyCap) {
+          log('私信遥控：今天的额度用完了')
+          break
+        }
+        if (c.askCap > 0 && rounds.count >= c.askCap) {
+          reply = `今天的额度用完了（上限 ${c.askCap} 轮，明天再来）。`
+        } else {
+          /* ⭐ 2026-10-22 用户定：所有私信都进会话（「没有人会一直盯着那个插件的面板，
+           *    反而是新建的对话能看得更清楚」）。代价是每条多等约 10 秒；
+           *    跑不成时才退回宿主自己拼的只读答案（dmAnswer）。 */
+          /* ⭐ 重活先回一句「收到」（2026-10-22 用户要的是「跟 AI 聊天」：发个视频让它分析，
+           *    一轮要取字幕+读内容，1~2 分钟。干等两分钟像断了，先应一声。） */
+          if (/(BV[0-9A-Za-z]{10}|bilibili\.com|b23\.tv|分析|总结|看看|讲讲)/.test(cmdText)) {
+            try { await call('bili_send_message', { receiver_uid: c.owner, text: '收到，我看一下，一会儿回你～' }) } catch { /* 应一声失败不影响正文 */ }
+          }
+          log(`私信遥控：起一轮处理「${cmdText.slice(0, 30)}」`)
+          const r = await dmAsk(isAsk ? mAsk[2] : cmdText, dmContext())
+          rounds.count += 1; st.ask = rounds      // 每起一轮都算（不管是不是「问」）
+          reply = r?.text ? r.text : (dmAnswer(cmdText) || `我这轮没跑成（${r?.error || '没有答复'}），过会儿再发我一次？`)
+        }
+        if (!reply) { st.keys[key] = ts || now; continue }                            // 兜底：实在没内容就不回
+        const today = dayKey(new Date())
+        const daily = st.daily?.date === today ? st.daily : { date: today, count: 0 }
+        try {
+          await call('bili_send_message', { receiver_uid: c.owner, text: reply.slice(0, 480) })
+          daily.count += 1
+          handled += 1
+          guardLogAppend({ ts: Date.now(), type: 'dm', cmd: text.slice(0, 80), ok: true })
+          log(`私信遥控：回了「${text.slice(0, 30)}」`)
+        } catch (e) {
+          guardLogAppend({ ts: Date.now(), type: 'dm', cmd: text.slice(0, 80), ok: false, error: String(e?.message ?? e) })
+          log(`私信遥控：回不出去（${e?.message ?? e}）`)
+        }
+        st.daily = daily
+        st.keys[key] = ts || now
+        if (handled >= 5) break            // 一轮最多处理 5 条，别一次刷屏
+      }
+      st.lastTs = now
+      const keep = now - 3 * 86400_000     // msg_key 只留 3 天
+      for (const [k, v] of Object.entries(st.keys)) if (!(Number(v) >= keep)) delete st.keys[k]
+      saveDm(st)
+      if (first) log('私信遥控：已就绪，从现在开始听（历史私信不回）')
+    } catch (e) {
+      log(`私信遥控这一跳出错（已兜住，不影响宿主）：${e?.message ?? e}`)
+    } finally { dmBusy = false }
+  }
+
+  try {
+    /* 10 秒一跳（不是 60 秒）：热窗口里要 20 秒一拉，跳太粗就退化成 60 秒了 */
+    const dt = setInterval(() => { dmTick().catch((e) => log(`私信遥控定时器异常：${e?.message ?? e}`)) }, 10_000)
+    dt.unref?.()
+    ctx.effect(() => () => clearInterval(dt), 'bili-pond: 私信遥控定时器')
+  } catch (e) { log(`私信遥控定时器没起来：${e?.message ?? e}`) }
 
   /* ─────────────── HTTP（设置页用） ─────────────── */
 
@@ -1818,6 +2725,11 @@ export function apply(ctx, config) {
   const checkDutyModel = async () => {
     const prov = String(cfg.dutyProvider || '').trim()
     if (!prov) return { ok: true }
+    /* ⚠️ 只选了线路没选模型：不拦（这一轮跟随 profile 默认模型），但要说清楚，
+     *    否则用户会以为「我明明选了 workbuddy-local」却没生效 */
+    if (!String(cfg.dutyModel || '').trim()) {
+      return { ok: true, warn: `线路选了「${prov}」但没选具体模型 —— 这一轮会用 profile 默认模型` }
+    }
     /* ⭐ 校验要看「带上宿主线路之后」的样子：值班真的会带那份 overlay（routeOverlayYml），
      *    不带给它的话，用户明明能用却被告知「这个 profile 里没有这条线路」 */
     const probe = writeRouteOverlay()
@@ -2200,6 +3112,9 @@ export function apply(ctx, config) {
       log: logFile,
       // ⭐ 人设是否真的读得到（设置页要能回答"我的人设生效了吗"）
       workspace: String(cfg.workspace || '').trim(),
+      /* ⭐ 跑在哪个目录（空 = 跟随工作区）：界面要显示它，并说明会话会出现在哪个列表里 */
+      dutyCwd: String(cfg.dutyCwd || '').trim(),
+      runDir: runDir(),
       agentsFound: (() => {
         const ws = String(cfg.workspace || '').trim()
         return Boolean(ws && existsSync(join(ws, 'AGENTS.md')))
@@ -2374,6 +3289,56 @@ export function apply(ctx, config) {
       })
     }
 
+    /* ⭐ 守护评论区（2026-10-22）：状态 + 手动扫一次。
+     *    手动扫**只入队、不立刻开跑** —— 跑一轮要花模型额度，让使用者自己决定什么时候跑。 */
+    if (req.method === 'GET' && path === '/api/bili-pond/guard') {
+      const g = guardCfg()
+      const st = readGuard()
+      let q = []
+      try { const j = readJson(guardQueueFile, {}); q = Array.isArray(j?.items) ? j.items : [] } catch { q = [] }
+      return sendJson(res, 200, {
+        ok: true,
+        on: g.on,
+        whitelist: [...g.whitelist],
+        ownerUid: g.ownerUid,
+        selfUid: g.selfUid,
+        ownAll: g.ownAll,
+        dailyCap: g.dailyCap,
+        daily: st.daily,
+        scope: g.scope,
+        perRound: g.perRound,
+        pollMinutes: Math.round(g.pollMs / 60_000),
+        emoji: g.emoji,
+        seenCount: Object.keys(st.seen).length,
+        watermark: { atId: st.atId, atTime: st.atTime },
+        queue: q,
+        last: guardLast,
+      })
+    }
+    /* ⭐ 守护记录：扫到什么 / 判成什么 / 真发出去什么（回复那一行由 MCP 子进程写，见 bili_reply） */
+    if (req.method === 'GET' && path === '/api/bili-pond/guard/log') {
+      const url = new URL(req.url, 'http://127.0.0.1')
+      const limit = Number(url.searchParams.get('limit') || 50)
+      const st = readGuard()
+      const answered = guardAnswered()
+      return sendJson(res, 200, {
+        ok: true,
+        /* ⚠️ 这里的数是从守护记录里数出来的**真发出去**的条数，不是「派出去」的条数 */
+        daily: { date: dayKey(new Date()), count: answered.today.size },
+        pending: Object.keys(st.pending).length,
+        dailyCap: Math.max(0, Math.min(500, Number(cfg.guardDailyCap) || 0)),
+        file: guardLogFile,
+        items: readGuardLog(Number.isFinite(limit) ? limit : 50),
+      })
+    }
+    if (req.method === 'POST' && path === '/api/bili-pond/guard/scan') {
+      try {
+        const r = await guardScan()
+        return sendJson(res, 200, { ok: true, ...r })
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
+      }
+    }
     if (req.method === 'GET' && path === '/api/bili-pond/config') {
       return sendJson(res, 200, { ok: true, config: cfg, windows: WINDOWS, home: stateDir })
     }
@@ -2387,7 +3352,10 @@ export function apply(ctx, config) {
         'autoRun', 'autoRunsPerDay', 'autoGapMinutes', 'peakValleyOnly',
         'perRoundMax', 'perDayMax', 'transcribePerDay',
         'minDurationMin', 'maxDurationMin', 'preferSubtitle', 'subtitleProbeMax',
-        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'dutyProvider', 'dutyModel', 'workspace', 'reportLevel', 'replyToComments', 'replyPerRound']) {
+        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'dutyProvider', 'dutyModel', 'workspace', 'dutyCwd', 'reportLevel', 'replyToComments', 'replyPerRound',
+        // 2026-10-22 守护评论区（骑士团）
+        'guardOn', 'guardWhitelist', 'guardOwnAll', 'guardDailyCap', 'guardScope', 'guardPerRound', 'guardPollMinutes', 'guardEmoji', 'guardTone',
+    'dmCtlOn', 'dmCtlPrefix', 'dmCtlPollMinutes', 'dmCtlDailyCap', 'dmCtlAskCap']) {
         if (k in body) patch[k] = body[k]
       }
       // ⭐ 范围钳制 + 两份都写（config.json / DSH 原生设置页），统一走 persistCfg —— 见文件上方

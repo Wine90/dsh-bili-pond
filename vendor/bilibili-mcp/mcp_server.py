@@ -14,12 +14,19 @@ B站数据采集 MCP 服务，支持 OpenClaw / Claude Code / Cursor / Cline
 #      ③ 登录成功后凭证**原子写**（先写 .tmp 再 os.replace）
 #      ④ `bili_comments` 把抓取异常带进返回（风控 -412 不再伪装成"这条视频 0 条评论"）
 #      ⑤ `bili_reply` 回执带上 `rpid` / `rpid_str` / `root` / `parent`（判重表与评论复核要用）
+#      ⑥ `bili_comments` 加 `order`（time/like）+ 每条评论补 `mid`、子评论补 `rpid/root/parent/mid`
+#         （守护评论区要拿 id 精准回复；按热度排看不见新评论）
+#      ⑦ 新增 `bili_guard_scan`：@ 通道 + 指定视频新评论的增量扫描，一次给全值班轮要的字段
+#      ⑧ `_guard_log()` + `bili_reply` 落记录：真发出去的回复写进 `BILI_GUARD_LOG`（jsonl），
+#         给界面「守护记录」用 —— 模型的自我汇报不能当证据，这一层才知道成没成
 import asyncio
 import json
 import base64
 import os
+import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
@@ -310,21 +317,34 @@ async def bili_search(keyword: str, num: int = 10, order: str = "totalrank") -> 
 # ========== Tool 2: 获取评论 ==========
 
 @tool()
-async def bili_comments(bvid: str, num: int = 30) -> str:
+async def bili_comments(bvid: str, num: int = 30, order: str = "like") -> str:
     """
-    获取B站视频的热门评论
+    获取B站视频的评论（可按热度或按时间）
 
     Args:
         bvid: 视频BV号，如"BV1uNk1YxEJQ"
         num: 获取评论数量，默认30
-    
+        order: 排序方式："like"=按点赞热度（默认），"time"=按时间倒序（最新在前）。
+               值班轮要"发现新评论"时必须用 "time" —— 按热度排的话，一条刚发出、
+               还没人点赞的新评论会排到很后面，翻多少页都看不见。非法值按 "like" 处理。
+
     Returns:
         JSON格式的评论列表，包含用户名、评论内容、点赞数、回复数
+        （另带每条评论的 mid / rpid，以及 top_replies 里子评论的 rpid/root/parent/mid，
+          —— 值班轮要拿这些 id 去 bili_reply 精准回复，不能靠昵称猜）
     """
     cred = get_cred()
     v = video.Video(bvid=bvid, credential=cred)
     info = await v.get_info()
     aid = info["aid"]
+
+    # ⚠️ 别把 order 直接透传给 SDK：comment.OrderType 是枚举，传个不认识的字符串会在
+    #    SDK 内部抛错，把「排序参数写错」伪装成「抓评论失败」。这里显式映射、兜底 LIKE。
+    order_map = {
+        "like": comment.OrderType.LIKE,
+        "time": comment.OrderType.TIME,
+    }
+    order_enum = order_map.get((order or "").strip().lower(), comment.OrderType.LIKE)
 
     comments = []
     page = 1
@@ -335,7 +355,7 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
                 oid=aid,
                 type_=comment.CommentResourceType.VIDEO,
                 page_index=page,
-                order=comment.OrderType.LIKE,
+                order=order_enum,
                 credential=cred,
             )
             replies = resp.get("replies") or []
@@ -351,15 +371,27 @@ async def bili_comments(bvid: str, num: int = 30) -> str:
                     "content": content.get("message", ""),
                     "like": r.get("like", 0),
                     "reply_count": r.get("rcount", 0),
+                    # "time" 是老字段（= ctime），别改名：老调用方还在按 "time" 读，
+                    # 改名等于把它们的判重/时间窗静默清零。
                     "time": r.get("ctime", 0),
+                    # mid 是评论者的 uid：回复/去重/黑名单都得靠 id，昵称会重名、会改。
+                    "mid": int(member.get("mid", 0) or 0),
                 }
                 # 子评论
+                # ⚠️ 原来只取 2 条且只留 user/content/like —— 值班轮要靠 rpid/root/parent
+                #    才能回楼中楼（bili_reply 的 rpid/root 就是这三个值），丢了就只能新发一条评论。
+                #    取 3 条是因为常见"UP 主回复 + 两条追问"的形态，2 条会漏掉最新那条。
                 sub_replies = []
-                for sub in (r.get("replies") or [])[:2]:
+                for sub in (r.get("replies") or [])[:3]:
+                    sub_member = sub.get("member") or {}
                     sub_replies.append({
-                        "user": sub.get("member", {}).get("uname", ""),
-                        "content": sub.get("content", {}).get("message", ""),
+                        "user": sub_member.get("uname", ""),
+                        "content": (sub.get("content") or {}).get("message", ""),
                         "like": sub.get("like", 0),
+                        "rpid": sub.get("rpid", 0),
+                        "root": sub.get("root", 0),
+                        "parent": sub.get("parent", 0),
+                        "mid": int(sub_member.get("mid", 0) or 0),
                     })
                 if sub_replies:
                     c["top_replies"] = sub_replies
@@ -509,6 +541,30 @@ async def bili_video_info(bvid: str) -> str:
 
 # ========== Tool 6: 回复评论 ==========
 
+def _guard_log(entry: dict) -> None:
+    """守护记录：往 BILI_GUARD_LOG（宿主注入的路径）追加一行 JSON。
+
+    为什么在这一层记：回复到底有没有真发出去，只有真正调 B站 接口的这里知道；
+    模型的自我汇报靠不住（它会说「回了」，也可能实际被风控挡了）。
+    写不进去就算了 —— 记录是给人看的，绝不能因为它影响回复本身。
+
+    🔴 2026-10-22 实测事故：这个函数当初插在 `@tool()` 与 `async def bili_reply` **之间**，
+       把 bili_reply 的装饰器「抢」走了 —— bili_reply 从此不再注册，值班那一轮模型手里
+       根本没有这只工具（它说「我没有 bili_reply」是真的，不是幻觉），守护因此永远回不出去。
+       教训：装饰器必须紧贴被装饰的函数，插新函数请插在**整段之后**。
+    """
+    path = os.environ.get("BILI_GUARD_LOG") or ""
+    if not path:
+        return
+    try:
+        rec = {"ts": int(time.time() * 1000)}
+        rec.update(entry)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 @tool()
 async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     """
@@ -560,8 +616,12 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
                 val = result.get(key)
                 if isinstance(val, (int, str)) and str(val).strip() and str(val) != "0":
                     out[key] = val
+        _guard_log({"type": "reply", "ok": True, "bvid": bvid, "rpid": rpid,
+                    "new_rpid": out.get("rpid"), "text": text})
         return json.dumps(out, ensure_ascii=False)
     except Exception as e:
+        _guard_log({"type": "reply", "ok": False, "bvid": bvid, "rpid": rpid,
+                    "text": text, "error": str(e)})
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
@@ -1369,6 +1429,120 @@ async def bili_unread_messages() -> str:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
+# ========== Tool 22.6: 值班轮的「文件出口」（2026-10-22）==========
+# 🔴 为什么要有这几只：值班轮现在跑在**使用者工作区**里（会话才会出现在他的会话列表），
+#    而那一轮的沙箱是 workspace-write —— 只让写 cwd ⇒ 它写不了插件家目录里的
+#    `out/` 报告、`seen.md` 判重表、归档 ✗（实测 `[sandbox: file access denied]`）。
+#    这个 MCP 子进程是**宿主起的**，不受那一轮的沙箱限制 ⇒ 由它代写。
+#    ⚠️ 刻意不做成通用文件工具：只有「报告 / 判重表 / 归档」三个固定出口，
+#       路径由这里算，模型给不了任意路径 ✓
+#    目录取 `BILI_DUTY_HOME`（宿主写进 overlay 的 env），没设就取本文件所在目录
+#    —— 部署时 mcp_server.py 就铺在值班家目录里，两者等价。
+
+_DUTY_HOME = Path(os.environ.get("BILI_DUTY_HOME") or Path(__file__).resolve().parent)
+
+
+def _duty_write(rel_parts, text: str, append: bool = False) -> dict:
+    try:
+        f = _DUTY_HOME.joinpath(*rel_parts)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if append else "w"
+        with open(f, mode, encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        return {"ok": True, "file": str(f), "chars": len(text), "append": append}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@tool()
+async def bili_report_save(markdown: str) -> str:
+    """把这一轮的 Markdown 报告整份写到插件家目录的 out/<今天>.md（覆盖写）。
+
+    值班轮跑在工作区里、沙箱只让写工作区，所以报告用这只工具交，别用写文件工具。
+    """
+    day = time.strftime("%Y-%m-%d", time.localtime())
+    return json.dumps(_duty_write(["out", f"{day}.md"], str(markdown or "")), ensure_ascii=False)
+
+
+@tool()
+async def bili_seen_read(limit_chars: int = 20000) -> str:
+    """读判重表 seen.md（返回尾部 limit_chars 个字符，够判重就行）。"""
+    try:
+        f = _DUTY_HOME / "seen.md"
+        text = f.read_text(encoding="utf-8") if f.exists() else ""
+        n = max(1000, min(int(limit_chars or 20000), 200000))
+        return json.dumps({
+            "ok": True, "file": str(f), "exists": f.exists(),
+            "chars": len(text), "tail": text[-n:],
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
+
+
+@tool()
+async def bili_seen_append(lines: str) -> str:
+    """往判重表 seen.md 追加记录（一行一条，别重复追加同一行）。"""
+    text = str(lines or "")
+    if not text.endswith("\n"):
+        text += "\n"
+    return json.dumps(_duty_write(["seen.md"], text, append=True), ensure_ascii=False)
+
+
+@tool()
+async def bili_archive_append(lines: str) -> str:
+    """往归档 out/<YYYY-MM>.md 追加记录（一行一条：日期 · BV · 标题 · UP · 结论 · 链接）。"""
+    month = time.strftime("%Y-%m", time.localtime())
+    text = str(lines or "")
+    if not text.endswith("\n"):
+        text += "\n"
+    return json.dumps(_duty_write(["out", f"{month}.md"], text, append=True), ensure_ascii=False)
+
+
+# ========== Tool 22.5: 读私信（私信遥控通道，2026-10-22）==========
+
+@tool()
+async def bili_dm_inbox(uid: int = 0, limit: int = 20) -> str:
+    """
+    读「指定用户 ↔ 本号」的私信内容（最近三十条里取最新的 limit 条）
+
+    用途：私信遥控 —— 主人在手机上给小号发一条「# 状态」，宿主这边扫到就执行并回一条。
+    ⚠️ 只有**读**：发私信是 bili_send_message。方向用 dir 区分（in = 他发给我的）。
+
+    Args:
+        uid: 对方 UID（必填；读谁和本号的私信）
+        limit: 最多返回几条（默认 20）
+
+    Returns:
+        {"ok": true, "talker_uid": 123, "count": n, "items": [{"key","ts","dir","text"}]}
+    """
+    if not uid:
+        return json.dumps({"ok": False, "error": "uid 必填（要读谁和本号的私信）"}, ensure_ascii=False)
+    cred = get_cred()
+    try:
+        resp = await session.fetch_session_msgs(talker_id=int(uid), credential=cred, session_type=1)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
+    msgs = (resp or {}).get("messages") if isinstance(resp, dict) else None
+    items = []
+    for m in (msgs or []):
+        try:
+            raw = m.get("content") or "{}"
+            # 私信的 content 是一层 JSON 字符串：{"content": "真正的话"}
+            text = json.loads(raw).get("content", "") if isinstance(raw, str) else str(raw)
+        except Exception:
+            text = ""
+        items.append({
+            "key": int(m.get("msg_key") or 0),
+            "ts": int(m.get("timestamp") or 0),
+            "dir": "in" if int(m.get("sender_uid") or 0) == int(uid) else "out",
+            "text": str(text or ""),
+        })
+    items.sort(key=lambda x: x["ts"])
+    if limit and len(items) > int(limit):
+        items = items[-int(limit):]
+    return json.dumps({"ok": True, "talker_uid": int(uid), "count": len(items), "items": items}, ensure_ascii=False)
+
+
 # ========== Tool 23: 最近收到的回复 ==========
 
 @tool()
@@ -1408,6 +1582,172 @@ async def bili_received_at_and_likes() -> str:
     except Exception as e:
         result["likes_error"] = str(e)
     return json.dumps(result, ensure_ascii=False)
+
+
+# ========== Tool 25: 值班扫描（@ 我的 + 新评论） ==========
+
+# BV 号恒为 "BV" + 10 位大小写字母/数字。@ 消息里的 uri 形如
+# https://www.bilibili.com/video/BV1NJn665Epm ，但**不能**直接 split("/")[-1]：
+# 带参数（?page=2 / &t=30）或末尾带斜杠时会把尾巴一起切出来。抽不到就留空串。
+_BV_PATTERN = re.compile(r"BV[0-9A-Za-z]{10}")
+
+
+@tool()
+async def bili_guard_scan(
+    bvids: list[str] = None,
+    since_at_id: int = 0,
+    since_at_time: int = 0,
+    since_ctimes: dict = None,
+    max_pages: int = 3,
+) -> str:
+    """
+    值班扫描：一次拿回「谁 @ 了我」+「我最近视频下的新评论」，供守护评论区的一轮使用。
+
+    和 bili_received_at_and_likes 的区别：那个只回裸通知（没有 BV / aid / rpid 的可用对应关系，
+    也没法增量），这个把每条 @ 归一成"能直接拿去 bili_reply"的形状，并按水位只给新的。
+
+    Args:
+        bvids: 要盯评论区的视频 BV 号列表。**只传自己/最近发的几个**，别把整个列表倒进来 ——
+               每个 BV 至少要一次 get_info + 一页评论，越界会招风控。传 None/[] 时只扫 @ 通道。
+        since_at_id: @ 通道的水位之一，上一轮返回的 at_cursor.id。0 = 从头/按 at_time 算。
+        since_at_time: @ 通道的时间水位（unix 秒），上一轮返回的 at_cursor.time。0 = 不限。
+        since_ctimes: {bvid: ctime} 的评论水位，只回 ctime 比它新的顶层评论。
+                      没给过的视频当 0（= 这一轮把 max_pages 页全给你）。
+        max_pages: 每个视频最多翻几页评论（每页 20 条，按时间倒序）。默认 3，即最多 60 条。
+
+    Returns:
+        JSON 字符串：
+          {
+            "at": [{"id","at_time","uid","uname","kind","title","bvid","aid","rpid","root_id","text"}],
+            "comments": [{"bvid","rpid","uid","uname","text","ctime","root"}],
+            "at_cursor": {"id": int, "time": int},   ← 下一轮原样传回 since_at_id / since_at_time
+            "errors": ["at: ...", "BV1xx: ..."]      ← 抓失败的部分；**非空不等于整次失败**
+          }
+
+        at[].uid / comments[].uid 都是 int 的 mid（拿不到给 0）；at[].rpid 是被 @ 的那条评论 id，
+        可以直接当 bili_reply 的 rpid；at[].aid 是视频 aid（bili_reply 只需要 bvid，aid 用于对账）。
+        调用方仍应按 rpid 去重：at_cursor 是「服务端游标」，同一轮里可能同时出现新旧条目。
+    """
+    cred = get_cred()
+
+    since_ctimes = since_ctimes or {}
+    errors = []
+    at_list = []
+    comments = []
+
+    # ⚠️ 水位先回填成入参：万一 get_at 抛错，返回的 at_cursor 必须还是**旧水位**。
+    #    如果这里直接给 {"id":0,"time":0}，调用方存下来就等于把水位清零 ——
+    #    下一轮会把历史上的 @ 全捞一遍，重复回复就是这么来的。
+    at_cursor = {"id": int(since_at_id or 0), "time": int(since_at_time or 0)}
+
+    # ---------- 通道 1：@ 我的 ----------
+    try:
+        at_resp = await session.get_at(
+            credential=cred,
+            last_id=since_at_id or None,
+            at_time=since_at_time or None,
+        )
+    except Exception as e:
+        # @ 通道挂了不该拖累评论通道：两个通道的失败要能分开看（errors 里分前缀）。
+        errors.append(f"at: {type(e).__name__}: {e}")
+        at_resp = None
+
+    if at_resp:
+        cursor = at_resp.get("cursor") or {}
+        # 服务端没给游标时保留旧水位，理由同上。
+        at_cursor = {
+            "id": int(cursor.get("id") or 0) or at_cursor["id"],
+            "time": int(cursor.get("time") or 0) or at_cursor["time"],
+        }
+
+        for it in (at_resp.get("items") or []):
+            at_user = it.get("user") or {}
+            at_item = it.get("item") or {}
+            at_time = int(it.get("at_time") or 0)
+            # SDK 已经按 last_id/at_time 做了服务端增量，这里再挡一道：
+            # 用 >= 而不是 >，因为 at_time 只到秒，同一秒内的多条 @ 会被 > 误杀；
+            # 多回来的那条靠 rpid 去重更稳（调用方做，见 docstring）。
+            if at_time and at_time < since_at_time:
+                continue
+            uri = at_item.get("uri") or ""
+            bv_match = _BV_PATTERN.search(uri)
+            at_list.append({
+                "id": int(it.get("id") or 0),
+                "at_time": at_time,
+                "uid": int(at_user.get("mid") or 0),
+                "uname": at_user.get("nickname", ""),
+                "kind": at_item.get("type", ""),
+                # title 是视频标题（评论/动态类 @ 也可能为空），只用于让模型判断"要不要回"。
+                "title": at_item.get("title", ""),
+                "bvid": bv_match.group(0) if bv_match else "",
+                # subject_id 就是视频 aid；source_id 是被 @ 的那条评论 rpid ——
+                # 这两个不是同一个东西，回复时要用 rpid，对账时要用 aid。
+                "aid": int(at_item.get("subject_id") or 0),
+                "rpid": int(at_item.get("source_id") or 0),
+                "root_id": int(at_item.get("root_id") or 0),
+                "text": at_item.get("source_content", ""),
+            })
+
+    # ---------- 通道 2：指定视频的新评论 ----------
+    page_limit = max(1, int(max_pages or 1))
+    for bvid in (bvids or []):
+        # 每个 bvid 单独 try：一个视频 -412 或 bvid 写错，不能把整次扫描打成空结果。
+        try:
+            v = video.Video(bvid=bvid, credential=cred)
+            # ⚠️ 必须走 get_info() 拿 aid：Video.get_aid() 只是返回构造时缓存的私有字段，
+            #    用 bvid 构造的 Video 上它是 None（不是协程、也不会去请求接口）。
+            info = await v.get_info()
+            aid = info["aid"]
+            since_ctime = int(since_ctimes.get(bvid, 0) or 0)
+
+            for page_index in range(1, page_limit + 1):
+                resp = await comment.get_comments(
+                    oid=aid,
+                    type_=comment.CommentResourceType.VIDEO,
+                    page_index=page_index,
+                    # 这里**必须**按时间倒序：按热度排的话，刚发出、还没人点赞的新评论
+                    # 排到很后面，翻 3 页根本看不见 —— 守护评论区就永远发现不了新评论。
+                    order=comment.OrderType.TIME,
+                    credential=cred,
+                )
+                replies = resp.get("replies") or []
+                if not replies:
+                    break
+
+                matched = 0
+                for r in replies:
+                    ctime = int(r.get("ctime") or 0)
+                    if ctime <= since_ctime:
+                        continue
+                    member = r.get("member") or {}
+                    matched += 1
+                    comments.append({
+                        "bvid": bvid,
+                        "rpid": r.get("rpid", 0),
+                        "uid": int(member.get("mid") or 0),
+                        "uname": member.get("uname", ""),
+                        "text": (r.get("content") or {}).get("message", ""),
+                        "ctime": ctime,
+                        "root": r.get("root", 0),
+                    })
+
+                # 整页都没命中就说明已经翻到水位以下了，再翻只是白烧风控额度。
+                # ⚠️ 判据是「整页 0 命中」而不是「第一条就旧」：置顶评论会被 B站 插在页首，
+                #    它的 ctime 可能很老，按第一条判断会提前收摊、漏掉整页新评论。
+                if matched == 0:
+                    break
+                if page_index < page_limit:
+                    # 页间隔 0.4s 防风控：连续翻页是最容易触发 -412 的地方。
+                    await asyncio.sleep(0.4)
+        except Exception as e:
+            errors.append(f"{bvid}: {type(e).__name__}: {e}")
+
+    return json.dumps({
+        "at": at_list,
+        "comments": comments,
+        "at_cursor": at_cursor,
+        "errors": errors,
+    }, ensure_ascii=False)
 
 
 # ========== 启动 ==========

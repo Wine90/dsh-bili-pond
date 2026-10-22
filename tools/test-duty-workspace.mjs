@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const src = readFileSync(join(here, '..', 'index.js'), 'utf8')
 const py = readFileSync(join(here, '..', 'vendor', 'bilibili-mcp', 'mcp_server.py'), 'utf8')
+const duty = readFileSync(join(here, '..', 'prompts', 'duty.md'), 'utf8')
 
 let n = 0
 let fails = 0
@@ -43,6 +44,12 @@ ok(/'bili_report_save', 'bili_seen_read', 'bili_seen_append', 'bili_archive_appe
 ok(/bili_report_save\(markdown\)/.test(src), '提示词应告诉模型用 bili_report_save 交报告')
 ok(/这一轮的工作目录就是插件数据目录/.test(src), '提示词应说明这一轮的工作目录就是插件家')
 ok(/bili_archive_append/.test(src) && /bili_seen_append\(lines\)/.test(src), '判重表与归档也要走工具')
+ok(/「评论记录」[\s\S]*真正通过 `bili_reply` 成功发出去/.test(duty),
+  '章程必须明确：评论记录只记真正发出去的评论')
+ok(/「看过的视频」[\s\S]*“挑中”绝对不等于“已评论”/.test(duty),
+  '章程必须明确：看过的视频里的挑中不代表已评论')
+ok(/想补评论时，只检查「评论记录」/.test(duty),
+  '章程必须明确：补评论只查评论记录，不受看过的视频拦截')
 
 console.log('=== MCP 侧实现 ===')
 ok(/_DUTY_HOME = Path\(os\.environ\.get\("BILI_DUTY_HOME"\) or Path\(__file__\)\.resolve\(\)\.parent\)/.test(py),

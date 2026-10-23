@@ -1637,9 +1637,26 @@ const pondAccount = async () => {
      *    写不进去就丢：这里是 stream 回调，抛一次就把整个宿主带走。 */
     try { writeFileSync(runLogFile, '', 'utf8') } catch { /* 清不掉也无所谓，继续追加 */ }
     let pickBuf = ''   // stdout 是按块来的，事件行可能被切断 ⇒ 先攒着，按 \n 切
+    const roundUsage = { in: 0, cache: 0, out: 0, steps: 0 }
     const pick = (buf) => {
       const s = String(buf)
       try { appendFileSync(runLogFile, s, 'utf8') } catch { /* 绝不能抛 */ }
+      /* ⭐ 顺手把这一轮的 token 用量抓出来（status/step_end 事件里的 usage） */
+      try {
+        pickBuf += s
+        const lines = pickBuf.split('\n')
+        pickBuf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.includes('"usage"')) continue
+          let ev; try { ev = JSON.parse(line) } catch { continue }
+          const u = ev && ev.usage
+          if (!u) continue
+          roundUsage.in += Number(u.inputTokens) || 0
+          roundUsage.cache += Number(u.cacheReadTokens) || 0
+          roundUsage.out += Number(u.outputTokens) || 0
+          roundUsage.steps += 1
+        }
+      } catch { /* 抓不到就算了，不影响值班 */ }
     }
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
@@ -1649,6 +1666,7 @@ const pondAccount = async () => {
       const tookSec = Math.round((Date.now() - startedMs) / 1000)
       dutyRun = null
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
+      recordUsage(roundUsage)     // ⭐ 这一轮用了多少 token 记一笔
       recordRoundHistory()        // ⭐ 把这一轮的日报解析进 history.jsonl（界面的「历史记录」靠它）
       /* ⭐ 守护：这一轮的待回复清单用完就删 —— 留着的话下一轮会把同一批再塞进提示词，
        *    模型就会重复回同一批人（seen 表只挡"再扫出来"，挡不住"清单还在"） */
@@ -2353,6 +2371,36 @@ const pondAccount = async () => {
    *    ⚠️ llm 是**可选**依赖：拿不到（老版本 / 没挂 llm）就回空列表，设置页照样能用，
    *       只是没有下拉 —— 绝不能让整条插件因为这个不激活。
    */
+  /* ⭐ 用量账本：每轮跑完把 token 记一行（usage-log.jsonl），页面显示"今日 ≈¥x · N tokens"。
+   *    数据来源：headless 的 --json 流里 status/step_end 事件带的 usage（inputTokens/outputTokens/cacheReadTokens）。
+   *    ⚠️ 费用是**估算**：单价取设置里的 priceIn/priceCache/priceOut（美元/百万 token），默认按 glm-5.3-flash 量级。
+   *       不追求准，只求"心里有个数"。 */
+  const usageLogFile = join(stateDir, 'usage-log.jsonl')
+  const recordUsage = (u) => {
+    if (!u) return
+    const total = (u.in || 0) + (u.cache || 0) + (u.out || 0)
+    if (total <= 0) return
+    try {
+      appendFileSync(usageLogFile, JSON.stringify({ at: new Date().toISOString(), day: dayKey(), in: u.in | 0, cache: u.cache | 0, out: u.out | 0, steps: u.steps | 0 }) + '\n', 'utf8')
+    } catch { /* 记账失败绝不能影响值班 */ }
+  }
+  const readUsageToday = () => {
+    const day = dayKey()
+    let i = 0, c = 0, o = 0, rounds = 0
+    try {
+      const txt = readFileSync(usageLogFile, 'utf8')
+      for (const line of txt.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        let r; try { r = JSON.parse(line) } catch { continue }
+        if (r.day !== day) continue
+        i += Number(r.in) || 0; c += Number(r.cache) || 0; o += Number(r.out) || 0; rounds += 1
+      }
+    } catch { /* 还没记过账 */ }
+    const pIn = Number(cfg.priceIn ?? 0.15), pCache = Number(cfg.priceCache ?? 0.03), pOut = Number(cfg.priceOut ?? 0.6)
+    const usd = (i / 1e6) * pIn + (c / 1e6) * pCache + (o / 1e6) * pOut
+    return { day, rounds, tokens: i + c + o, in: i, cache: c, out: o, usd, cny: usd * 7.2 }
+  }
+
   const modelsHere = async () => {
     const llm = ctx.get?.('llm')
     if (!llm || typeof llm.listProviders !== 'function') {
@@ -3146,6 +3194,7 @@ const pondAccount = async () => {
       return sendJson(res, 200, {
         ok: true,
         account: await pondAccount(),
+        usage: readUsageToday(),
         stats: {
           xp, step: STEP, level: Math.max(1, Math.floor(xp / STEP) + 1), xpIn: xp % STEP,
           days: days.size, items: items.length, picked, replies: replies.length,

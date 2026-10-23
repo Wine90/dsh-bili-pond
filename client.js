@@ -69,7 +69,7 @@ window.__ModuleLoader__.load({
   --bd-fg:var(--dsw-alias-label-primary,inherit);
   --bd-fg-2:var(--dsw-alias-label-secondary,#c5c8cd);
   --bd-fg-3:var(--dsw-alias-label-tertiary,#8b8f96);
-  --bd-accent:var(--dsw-alias-brand-primary,#3b82f6);
+  --bd-accent:#2563eb;
   --bd-ok:var(--dsw-alias-state-success-primary,#22c55e);
   --bd-warn:var(--dsw-alias-state-warn-primary,#f59e0b);
   --bd-err:var(--dsw-alias-state-error-primary,#ef4444);
@@ -78,6 +78,7 @@ window.__ModuleLoader__.load({
 [data-bd-page]{
   display:flex;flex-direction:column;gap:16px;
   max-width:720px;padding:2px 0 28px;
+  height:100%;max-height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;
   color:var(--bd-fg);font-size:13px;line-height:20px;
   -webkit-font-smoothing:antialiased;
 }
@@ -210,7 +211,8 @@ window.__ModuleLoader__.load({
   background:transparent;border:1px solid var(--bd-line-2);border-radius:6px;
   transition:background .12s ease,border-color .12s ease;
 }
-[data-bd-btn]:hover{background:var(--bd-hover);border-color:var(--bd-fg-3);}
+[data-bd-btn]:hover{background:var(--bd-hover);border-color:var(--bd-fg-3);box-shadow:0 0 0 2px rgba(37,99,235,.30),0 0 14px rgba(37,99,235,.36);}
+[data-bd-btn]:active{box-shadow:0 0 0 3px rgba(37,99,235,.46),0 0 20px rgba(37,99,235,.50);}
 [data-bd-btn]:focus-visible{outline:2px solid var(--bd-accent);outline-offset:1px;}
 [data-bd-btn][data-primary]{
   background:var(--bd-accent);border-color:var(--bd-accent);color:#fff;
@@ -2056,6 +2058,7 @@ window.__ModuleLoader__.load({
       const st = d.stats || { xp: 0, level: 1, step: 200, xpIn: 0, days: 0, items: 0, picked: 0, replies: 0, keywords: [], week: [] }
       const items = d.items || []
       const daily = d.daily || { count: 0, cap: 0 }
+    const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n || 0)
       const kws = [{ k: '全部', n: items.length }].concat(st.keywords || [])
       const kwOf = (e) => (e.keywords && e.keywords.length ? e.keywords : ['未标'])
       const shown = kw === '全部' ? items : items.filter((e) => kwOf(e).indexOf(kw) >= 0)
@@ -2241,7 +2244,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.5',
+              ' · v1.3.6',
             ]),
           ]),
         ]),
@@ -2250,6 +2253,10 @@ window.__ModuleLoader__.load({
           h('span', { key: 'b' }, ['回过 ', h('b', null, String(st.replies || 0)), ' 条']),
           h('span', { key: 'c' }, ['今天回过 ', h('b', null, String(daily.count || 0) + '/' + String(daily.cap || 0))]),
           h('span', { key: 'd' }, ['攒了 ', h('b', null, String(st.xp || 0)), ' 点经验']),
+          d.usage && d.usage.tokens
+            ? h('span', { key: 'f', title: '估算：按设置里的单价（美元/百万 token）× 今日用量' },
+                ['今日 ≈', h('b', null, '¥' + Number(d.usage.cny || 0).toFixed(2)), ' · ' + fmtTok(d.usage.tokens) + ' tokens'])
+            : null,
           err ? h('span', { key: 'e', className: 'pond-bad' }, '接口出错：' + err) : null,
         ]),
         tabBar,

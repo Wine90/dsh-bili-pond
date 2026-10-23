@@ -59,4 +59,13 @@ ok('返回体带 stats / items / daily', /stats: \{/.test(host) && /items, memor
 ok('assets/icon.png 存在', existsSync(join(root, 'assets', 'icon.png')))
 ok('package.json 的 files 含 assets（发布不会漏图）', (pkg.files || []).includes('assets'))
 
+/* ⭐ 1.3.6：主色固定 / 设置页能滚 / 用量账本 */
+ok('主色固定', /--bd-accent:#2563eb;/.test(client), '--bd-accent 不再跟随主题 brand（壁纸主题下是浅色 ⇒ 白底白字）')
+ok('设置页可滚动', /\[data-bd-page\]\{[^}]*overflow-y:auto/.test(client), '设置页根节点自己滚（宿主不给滚）')
+ok('设置页按钮也有发光', /\[data-bd-btn\]:hover\{[^}]*box-shadow/.test(client), '悬停有蓝光')
+ok('用量账本路由', /usage: readUsageToday\(\)/.test(host), '/pond 返回今日用量')
+ok('用量抓取', /roundUsage\.in \+= Number\(u\.inputTokens\)/.test(host), '从 status/step_end 事件累加 token')
+ok('轮末记账', /recordUsage\(roundUsage\)/.test(host), '每轮结束记一行 usage-log.jsonl')
+ok('状态条显示费用', /今日 ≈/.test(client), '首页状态条显示 ¥ 与 tokens')
+
 console.log(`✅ 大肥鱼整页校验通过（${pass} 条断言）`)

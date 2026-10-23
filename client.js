@@ -1915,6 +1915,12 @@ window.__ModuleLoader__.load({
       .pond-lv .track { flex:1; height:5px; border-radius:3px; background:var(--dsw-alias-bg-layer-2); overflow:hidden; }
       .pond-lv .track b { display:block; height:100%; background:var(--dsw-alias-brand-primary); border-radius:3px; }
       .pond-say { flex:1; min-width:0; font-size:13px; line-height:1.6; color:var(--dsw-alias-label-secondary); }
+      .pond-ava { width:52px; height:52px; border-radius:14px; object-fit:cover; flex:none; background:var(--dsw-alias-bg-layer-2); }
+      .pond-acts { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+      .pond-meta { font-size:11px; line-height:1.6; color:var(--dsw-alias-label-tertiary); text-align:right; white-space:nowrap; }
+      .pond-meta a { color:var(--dsw-alias-label-secondary); text-decoration:none; }
+      .pond-meta a:hover { color:var(--dsw-alias-brand-primary); text-decoration:underline; }
+      .pond-hero h1 { font-size:17px; margin:0; }
       .pond-say em { display:block; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); margin-top:3px; }
       .pond-acts { display:flex; gap:8px; flex:none; }
       .pond-btn { height:30px; padding:0 13px; border-radius:7px; border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font-size:12.5px; cursor:pointer; }
@@ -2194,15 +2200,9 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'pond' }, [
         h('div', { key: 'hero', className: 'pond-hero' }, [
-          h('img', { key: 'i', src: POND_ICON, alt: '' }),
+          h('img', { key: 'i', className: 'pond-ava', src: (d.account && d.account.face) ? d.account.face : POND_ICON, alt: '' }),
           h('div', { key: 'w', className: 'pond-who' }, [
-            h('h1', { key: 'h' }, ['B站鱼塘', h('span', { key: 'en' }, 'Bili Pond')]),
-            h('div', { key: 'by', className: 'pond-by' }, [
-              h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
-              ' · ',
-              h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.2',
-            ]),
+            h('h1', { key: 'h', title: (d.account && d.account.uname) || '还没登录小号' }, (d.account && d.account.uname) ? d.account.uname : '还没登录小号'),
             h('div', { key: 'lv', className: 'pond-lv' }, [
               h('b', { key: 'b' }, 'Lv.' + (st.level || 1)),
               h('span', { key: 't', className: 'track' }, h('b', { style: { width: Math.round(((st.xpIn || 0) / (st.step || 200)) * 100) + '%' } })),
@@ -2214,8 +2214,17 @@ window.__ModuleLoader__.load({
             h('em', { key: 'e' }, '—— 鱼说'),
           ]),
           h('div', { key: 'a', className: 'pond-acts' }, [
-            h('button', { key: 'r', className: 'pond-btn primary', disabled: busy, onClick: run, style: { background: '#2563eb', color: '#fff', borderColor: '#2563eb' } }, busy ? '跑着呢…' : '跑一轮'),
-            h('button', { key: 'f', className: 'pond-btn', onClick: load }, '刷新'),
+            h('div', { key: 'b', style: { display: 'flex', gap: 8 } }, [
+              h('button', { key: 'r', 'data-bd-btn': '', 'data-primary': '', type: 'button', disabled: busy, onClick: run }, busy ? '跑着呢…' : '跑一轮'),
+              h('button', { key: 'f', 'data-bd-btn': '', type: 'button', onClick: load }, '刷新'),
+            ]),
+            h('div', { key: 'meta', className: 'pond-meta' }, [
+              'B站鱼塘 · ',
+              h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
+              ' · ',
+              h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
+              ' · v1.3.2',
+            ]),
           ]),
         ]),
         h('div', { key: 'strip', className: 'pond-strip' }, [

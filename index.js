@@ -191,6 +191,33 @@ const PROVIDER_PACKAGES = {
 
 export function apply(ctx, config) {
   const pluginDir = dirname(fileURLToPath(import.meta.url))
+
+/* 小号是谁：读 python 那份 bili_credential.json，问一次 B站 nav；成功缓存 10 分钟，失败只缓存 1 分钟（登录后很快就能看到） */
+let navCache = { at: 0, data: null }
+const pondAccount = async () => {
+  const ttl = navCache.data ? 10 * 60_000 : 60_000
+  if (Date.now() - navCache.at < ttl) return navCache.data
+  let out = null
+  try {
+    /* 凭证由 python 那个 MCP 写：优先家目录（实际位置），再退到包内 vendor 目录 */
+    const cf = [join(stateDir, 'bili_credential.json'), join(pluginDir, 'vendor', 'bilibili-mcp', 'bili_credential.json')].find((p) => existsSync(p)) || ''
+    if (cf) {
+      const c = JSON.parse(readFileSync(cf, 'utf8'))
+      const cookie = ['SESSDATA=' + (c.sessdata || ''), 'bili_jct=' + (c.bili_jct || ''),
+        'buvid3=' + (c.buvid3 || ''), 'DedeUserID=' + (c.dedeuserid || '')].join('; ')
+      const r = await fetch('https://api.bilibili.com/x/web-interface/nav', {
+        headers: { cookie, referer: 'https://www.bilibili.com/', 'user-agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(6000),
+      })
+      const j = await r.json()
+      if (j && j.code === 0 && j.data && j.data.isLogin) {
+        out = { mid: j.data.mid, uname: j.data.uname, face: String(j.data.face || '').replace(/^http:/, 'https:') }
+      }
+    }
+  } catch { out = null }
+  navCache = { at: Date.now(), data: out }
+  return out
+}
   // ⭐ 自己的版本号（从 package.json 读，设置页要显示它）
   let myVer = ''
   const myVersion = () => {
@@ -3118,6 +3145,7 @@ export function apply(ctx, config) {
       try { if (existsSync(diaryFile)) diary = readFileSync(diaryFile, 'utf8') } catch { diary = '' }
       return sendJson(res, 200, {
         ok: true,
+        account: await pondAccount(),
         stats: {
           xp, step: STEP, level: Math.max(1, Math.floor(xp / STEP) + 1), xpIn: xp % STEP,
           days: days.size, items: items.length, picked, replies: replies.length,

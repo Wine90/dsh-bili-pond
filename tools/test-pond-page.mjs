@@ -41,6 +41,8 @@ ok('GitHub 链接保留', /github\.com\/YOYOLnFu\/dsh-bili-pond/.test(client))
 ok('Gitee 链接已去掉', !/gitee\.com\/YOYOLnFu\/bilibili/.test(client))
 ok('主按钮写死蓝底白字（不依赖主题 token）', /\.pond-btn\.primary, \.pond \.pond-btn\.primary:hover[\s\S]{0,160}background:#2563eb/.test(client))
 ok('右侧记录默认限高、可展开', /\.pond-list\.cap \{ max-height/.test(client) && /const sideBlock = \(key, title, rows, empty\)/.test(client))
+ok('整页自身滚动（height:100% + overflow-y:auto，设置页能下拉）', /\.pond \{ display:flex;[\s\S]{0,220}height:100%;[\s\S]{0,120}overflow-y:auto/.test(client))
+ok('主按钮用 !important 硬顶宿主样式 + 内联兜底', /background:#2563eb !important/.test(client) && /style: \{ background: '#2563eb', color: '#fff', borderColor: '#2563eb' \}/.test(client))
 ok('设置 Tab 复用原来的设置页', /h\(Panel\)/.test(client))
 
 ok('宿主有 /api/bili-pond/pond 路由', /path === '\/api\/bili-pond\/pond'/.test(host))

@@ -1901,7 +1901,7 @@ window.__ModuleLoader__.load({
     let openPond = () => {}
 
     const POND_CSS = `
-      .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; min-height:100%; overflow:auto; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
+      .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; height:100%; min-height:0; box-sizing:border-box; overflow-y:auto; overflow-x:hidden; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
       .pond * { box-sizing:border-box; }
       .pond-hero { display:flex; gap:14px; align-items:center; padding:14px 16px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); border-radius:12px; }
       .pond-hero > img { width:46px; height:46px; border-radius:11px; flex:none; }
@@ -1921,10 +1921,14 @@ window.__ModuleLoader__.load({
       .pond .pond-btn { color:var(--dsw-alias-label-primary); }
       .pond .pond-btn:hover { background:var(--dsw-alias-bg-layer-1); }
       .pond .pond-btn.primary, .pond .pond-btn.primary:hover, .pond .pond-btn.primary:active, .pond .pond-btn.primary:focus {
-        background:#2563eb; border-color:#2563eb; color:#fff; font-weight:500;
+        background:#2563eb !important; border-color:#2563eb !important; color:#fff !important; font-weight:500;
       }
-      .pond .pond-btn.primary:hover { background:#1d4ed8; border-color:#1d4ed8; }
-      .pond .pond-btn.primary[disabled] { background:#2563eb; color:#fff; }
+      .pond .pond-btn.primary:hover { background:#1d4ed8 !important; border-color:#1d4ed8 !important; }
+      .pond .pond-btn.primary[disabled] { background:#3b6fd4 !important; color:#fff !important; opacity:.85; }
+      /* 亮色主题下蓝底要更深一档才压得住，暗色主题下稍亮一点更醒目 */
+      html[data-theme='light'] .pond .pond-btn.primary, body[data-theme='light'] .pond .pond-btn.primary { background:#1d4ed8 !important; border-color:#1d4ed8 !important; }
+      html[data-theme='dark'] .pond .pond-btn.primary, body[data-theme='dark'] .pond .pond-btn.primary { background:#2563eb !important; border-color:#2563eb !important; }
+      @media (prefers-color-scheme: light) { .pond .pond-btn.primary { background:#1d4ed8 !important; border-color:#1d4ed8 !important; } }
       .pond-btn[disabled] { opacity:.5; cursor:default; }
       .pond-strip { display:flex; gap:15px; align-items:center; font-size:12.5px; color:var(--dsw-alias-label-secondary); padding:9px 14px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
       .pond-strip b { color:var(--dsw-alias-label-primary); font-weight:600; }
@@ -2210,7 +2214,7 @@ window.__ModuleLoader__.load({
             h('em', { key: 'e' }, '—— 鱼说'),
           ]),
           h('div', { key: 'a', className: 'pond-acts' }, [
-            h('button', { key: 'r', className: 'pond-btn primary', disabled: busy, onClick: run }, busy ? '跑着呢…' : '跑一轮'),
+            h('button', { key: 'r', className: 'pond-btn primary', disabled: busy, onClick: run, style: { background: '#2563eb', color: '#fff', borderColor: '#2563eb' } }, busy ? '跑着呢…' : '跑一轮'),
             h('button', { key: 'f', className: 'pond-btn', onClick: load }, '刷新'),
           ]),
         ]),

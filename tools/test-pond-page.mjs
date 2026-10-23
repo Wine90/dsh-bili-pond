@@ -68,4 +68,5 @@ ok('用量抓取', /roundUsage\.in \+= Number\(u\.inputTokens\)/.test(host), '�
 ok('轮末记账', /recordUsage\(roundUsage\)/.test(host), '每轮结束记一行 usage-log.jsonl')
 ok('状态条显示费用', /今日 ≈/.test(client), '首页状态条显示 ¥ 与 tokens')
 
+ok('设置卡片不被 flex 压缩裁剪（1.3.9 真根因）', /\.pond > \.pond-card \{ overflow:visible; flex:0 0 auto; \}/.test(client), 'overflow:hidden 会让自动最小高度归零，被压成 509px 裁掉 1600px 内容')
 console.log(`✅ 大肥鱼整页校验通过（${pass} 条断言）`)

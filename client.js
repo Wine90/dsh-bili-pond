@@ -1906,6 +1906,10 @@ window.__ModuleLoader__.load({
 
     const POND_CSS = `
       .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; max-height:calc(100vh - 120px); box-sizing:border-box; overflow-y:auto; overflow-x:hidden; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
+        /* ⭐ 1.3.9 真根因：.pond 是纵向 flex，子项默认可被压缩；.pond-card 的 overflow:hidden 让它的
+           自动最小高度归零，被压到 509px，设置内容 1600+px 被静默裁掉（没有滚动条）。
+           修法：.pond 的直接子卡片不裁剪、不压缩（flex:0 0 auto），内容撑开 .pond 由它统一滚动。 */
+        .pond > .pond-card { overflow:visible; flex:0 0 auto; }
         /* 嵌进鱼塘页的设置页：外层 .pond 已经在滚，内层不再自己滚、不再另设高度（避免双层滚动条 + 被裁） */
         .pond [data-bd-page]{ max-height:none; overflow:visible; padding-right:0; }
       .pond {
@@ -2246,7 +2250,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.8',
+              ' · v1.3.9',
             ]),
           ]),
         ]),

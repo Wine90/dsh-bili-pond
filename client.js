@@ -60,7 +60,7 @@ window.__ModuleLoader__.load({
 
     const CSS = `
 /* ══ 局部变量：全部映射到 DSH 主题 token，亮/暗自动跟随 ══════════════════ */
-[data-bd-page]{
+[data-bd-page], .pond {
   --bd-surface:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base,#1b1c1e));
   --bd-surface-2:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));
   --bd-input:var(--dsw-alias-bg-base,rgba(0,0,0,.18));
@@ -74,6 +74,8 @@ window.__ModuleLoader__.load({
   --bd-warn:var(--dsw-alias-state-warn-primary,#f59e0b);
   --bd-err:var(--dsw-alias-state-error-primary,#ef4444);
   --bd-hover:var(--dsw-alias-bg-overlay,rgba(128,128,128,.14));
+}
+[data-bd-page]{
   display:flex;flex-direction:column;gap:16px;
   max-width:720px;padding:2px 0 28px;
   color:var(--bd-fg);font-size:13px;line-height:20px;
@@ -2004,9 +2006,16 @@ window.__ModuleLoader__.load({
     function PondEntry() {
       /* 侧栏底部那个入口（宿主原文：Optional actions beside Settings at the sidebar foot） */
       return h('button', {
-        className: 'pond-btn', style: { height: 26, padding: '0 10px', fontSize: 12 },
-        onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
-      }, '🐟 B站鱼塘')
+        type: 'button', onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
+        style: {
+          display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px',
+          fontSize: 12, cursor: 'pointer', background: 'transparent',
+          color: 'var(--dsw-alias-label-primary)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6,
+        },
+      }, [
+        h('img', { key: 'i', src: POND_ICON, alt: '', width: 16, height: 16, style: { borderRadius: 4, display: 'block' } }),
+        h('span', { key: 't' }, 'B站鱼塘'),
+      ])
     }
 
     function PondPage() {
@@ -2236,7 +2245,12 @@ window.__ModuleLoader__.load({
         ]),
         tabBar,
         tab === 'history' ? historyTab : tab === 'memory' ? memoryTab : tab === 'diary' ? diaryTab : settingsTab,
-        h('div', { key: 'foot', className: 'pond-foot' }, 'B站鱼塘 · Bili Pond · 变量探索SEQVEC · 数据和开关都在这一页'),
+        h('div', { key: 'foot', className: 'pond-foot' }, [
+          h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
+          ' · ',
+          h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer' }, '变量探索SEQVEC'),
+          ' · 数据和开关都在这一页',
+        ]),
       ])
     }
 

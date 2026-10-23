@@ -1925,19 +1925,17 @@ window.__ModuleLoader__.load({
       .pond-hero h1 { font-size:17px; margin:0; }
       .pond-say em { display:block; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); margin-top:3px; }
       .pond-acts { display:flex; gap:8px; flex:none; }
-      .pond-btn { height:30px; padding:0 13px; border-radius:7px; border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font-size:12.5px; cursor:pointer; }
-      .pond .pond-btn { color:var(--dsw-alias-label-primary); }
-      .pond .pond-btn:hover { background:var(--dsw-alias-bg-layer-1); }
-      .pond .pond-btn.primary, .pond .pond-btn.primary:hover, .pond .pond-btn.primary:active, .pond .pond-btn.primary:focus {
-        background:#2563eb !important; border-color:#2563eb !important; color:#fff !important; font-weight:500;
-      }
-      .pond .pond-btn.primary:hover { background:#1d4ed8 !important; border-color:#1d4ed8 !important; }
-      .pond .pond-btn.primary[disabled] { background:#3b6fd4 !important; color:#fff !important; opacity:.85; }
-      /* 亮色主题下蓝底要更深一档才压得住，暗色主题下稍亮一点更醒目 */
-      html[data-theme='light'] .pond .pond-btn.primary, body[data-theme='light'] .pond .pond-btn.primary { background:#1d4ed8 !important; border-color:#1d4ed8 !important; }
-      html[data-theme='dark'] .pond .pond-btn.primary, body[data-theme='dark'] .pond .pond-btn.primary { background:#2563eb !important; border-color:#2563eb !important; }
-      @media (prefers-color-scheme: light) { .pond .pond-btn.primary { background:#1d4ed8 !important; border-color:#1d4ed8 !important; } }
-      .pond-btn[disabled] { opacity:.5; cursor:default; }
+      /* 按钮：不碰底色/字色（那是宿主的），只在悬停、按下、聚焦时加一圈发光 */
+      .pond [data-bd-btn] { transition:box-shadow .16s ease; }
+      .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.20), 0 0 12px rgba(37,99,235,.26); }
+      .pond [data-bd-btn]:active { box-shadow:0 0 0 2px rgba(37,99,235,.36), 0 0 18px rgba(37,99,235,.42); }
+      .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38); }
+      .pond [data-bd-btn][disabled] { box-shadow:none; cursor:not-allowed; }
+      /* 左下角入口：同样是原样 + 发光 */
+      .pond-entry { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 8px; border:0; border-radius:6px;
+        background:transparent; color:inherit; font-size:12px; cursor:pointer; transition:box-shadow .16s ease; }
+      .pond-entry:hover { box-shadow:0 0 0 2px rgba(37,99,235,.20), 0 0 12px rgba(37,99,235,.28); }
+      .pond-entry:active { box-shadow:0 0 0 2px rgba(37,99,235,.38), 0 0 18px rgba(37,99,235,.45); }
       .pond-strip { display:flex; gap:15px; align-items:center; font-size:12.5px; color:var(--dsw-alias-label-secondary); padding:9px 14px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
       .pond-strip b { color:var(--dsw-alias-label-primary); font-weight:600; }
       .pond-tabs { display:flex; gap:8px; }
@@ -2006,12 +2004,7 @@ window.__ModuleLoader__.load({
     function PondEntry() {
       /* 侧栏底部那个入口（宿主原文：Optional actions beside Settings at the sidebar foot） */
       return h('button', {
-        type: 'button', onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
-        style: {
-          display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px',
-          fontSize: 12, cursor: 'pointer', background: 'transparent',
-          color: 'var(--dsw-alias-label-primary)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6,
-        },
+        type: 'button', className: 'pond-entry', onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
       }, [
         h('img', { key: 'i', src: POND_ICON, alt: '', width: 16, height: 16, style: { borderRadius: 4, display: 'block' } }),
         h('span', { key: 't' }, 'B站鱼塘'),

@@ -1498,6 +1498,51 @@ async def bili_archive_append(lines: str) -> str:
     return json.dumps(_duty_write(["out", f"{month}.md"], text, append=True), ensure_ascii=False)
 
 
+# ========== Tool 26-28: 记忆 / 日记 / 鱼说（2026-10-23，鱼塘大页面的三个 Tab）==========
+#     为什么放在 MCP：跟报告/归档同一条管道（值班轮跑在工作区里、沙箱只让写工作区，
+#     这些文件都住在家目录里 ⇒ 必须由这只工具代写 ✓）。宿主 /pond 读这三个文件渲染页面。
+
+@tool()
+async def bili_memory_append(what: str, why: str = "", bvid: str = "") -> str:
+    """往记忆 memory.jsonl 追加一条（值得跨天记住的观察/知识，不是流水账）。
+
+    what：一句话说清记住了什么；why：为什么值得记；bvid：跟哪条视频有关（可空）。
+    判据：跟使用者有关、下次值班还用得上（他的项目/工具/口味/踩过的坑）。
+    每轮最多记 2~3 条 —— 记忆是「攒给以后用的」，不是把报告抄一遍。
+    """
+    line = json.dumps({
+        "t": str(what or "").strip(),
+        "why": str(why or "").strip(),
+        "bv": str(bvid or "").strip(),
+        "d": time.strftime("%Y-%m-%d %H:%M", time.localtime()),
+    }, ensure_ascii=False)
+    return json.dumps(_duty_write(["memory.jsonl"], line + "\n", append=True), ensure_ascii=False)
+
+
+@tool()
+async def bili_diary_write(markdown: str) -> str:
+    """把今天的日记整份写到 diary/<今天>.md（覆盖写，一天一篇）。
+
+    内容：今天看了什么、挑了哪几条、为什么、有什么感想 —— 用你自己的语气写，
+    一两百字就够，写给使用者看的，不是操作日志。一天只有一轮时，就写那一轮的事。
+    """
+    day = time.strftime("%Y-%m-%d", time.localtime())
+    return json.dumps(_duty_write(["diary", f"{day}.md"], str(markdown or "")), ensure_ascii=False)
+
+
+@tool()
+async def bili_say(text: str) -> str:
+    """留一句「鱼说的话」（一句话，≤50 字，覆盖上一句）。
+
+    从这一轮里挑一句你真心想对使用者说的 —— 观点、吐槽、今天最大的发现都行，
+    它会显示在鱼塘大页面的首页。别写成总结（那是报告的事），要像人说话。
+    """
+    t = str(text or "").strip()[:60]
+    if not t:
+        return json.dumps({"ok": False, "error": "空话不说"}, ensure_ascii=False)
+    return json.dumps(_duty_write(["say.txt"], t), ensure_ascii=False)
+
+
 # ========== Tool 22.5: 读私信（私信遥控通道，2026-10-22）==========
 
 # ========== 设置：私信里能改的那几个（A 档） ==========

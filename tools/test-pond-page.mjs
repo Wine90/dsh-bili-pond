@@ -70,4 +70,14 @@ ok('状态条显示费用', /今日 ≈/.test(client), '首页状态条显示 ¥
 
 ok('设置卡片不被 flex 压缩裁剪（1.3.9 真根因）', /\.pond > \.pond-card \{ overflow:visible; flex:0 0 auto; \}/.test(client), 'overflow:hidden 会让自动最小高度归零，被压成 509px 裁掉 1600px 内容')
 ok('设置区两栏重排（1.3.10）', /\.pond-settings \[data-bd-page\] \{ display:grid; grid-template-columns:1fr 1fr;/.test(client) && /@media \(max-width:1100px\)/.test(client), '宽屏两栏 grid，窄屏回退单列')
+
+/* ⭐ 1.3.11：记忆 / 日记 / 鱼说 —— 写入端落地（此前只有展示层） */
+const py = readFileSync(join(root, 'vendor', 'bilibili-mcp', 'mcp_server.py'), 'utf8')
+const duty = readFileSync(join(root, 'prompts', 'duty.md'), 'utf8')
+ok('MCP 有 bili_memory_append（记忆写入端）', /async def bili_memory_append\(what: str/.test(py))
+ok('MCP 有 bili_diary_write（日记写入端）', /async def bili_diary_write\(markdown: str/.test(py))
+ok('MCP 有 bili_say（鱼说写入端）', /async def bili_say\(text: str/.test(py))
+ok('值班章程要求写记忆/日记/鱼说', /bili_memory_append/.test(duty) && /bili_diary_write/.test(duty) && /bili_say/.test(duty))
+ok('宿主 /pond 返回 say 字段', /say: \{ date: dayKey\(new Date\(\)\), text: say \}/.test(host))
+
 console.log(`✅ 大肥鱼整页校验通过（${pass} 条断言）`)

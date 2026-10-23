@@ -3191,6 +3191,8 @@ const pondAccount = async () => {
       const diaryFile = join(stateDir, 'diary', dayKey(new Date()) + '.md')
       let diary = ''
       try { if (existsSync(diaryFile)) diary = readFileSync(diaryFile, 'utf8') } catch { diary = '' }
+      let say = ''
+      try { if (existsSync(join(stateDir, 'say.txt'))) say = readFileSync(join(stateDir, 'say.txt'), 'utf8').trim() } catch { say = '' }
       return sendJson(res, 200, {
         ok: true,
         account: await pondAccount(),
@@ -3203,6 +3205,7 @@ const pondAccount = async () => {
         daily: { date: dayKey(new Date()), count: answered.today.size, cap: Math.max(0, Math.min(500, Number(cfg.guardDailyCap) || 0)) },
         items, memory,
         diary: { date: dayKey(new Date()), text: diary },
+        say: { date: dayKey(new Date()), text: say },
         scans: scans.slice(-20).reverse().map((e) => ({ ts: e.ts, comments: (e.scanned && e.scanned.comments) || 0, queued: e.queued || 0 })),
         replies: replies.slice(-40).reverse().map((r) => {
           const q = queue.get(String(r.rpid)) || {}

@@ -2264,7 +2264,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.10',
+              ' · v1.3.11',
             ]),
           ]),
         ]),

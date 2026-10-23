@@ -1904,6 +1904,21 @@ window.__ModuleLoader__.load({
 
     const POND_CSS = `
       .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; height:100%; min-height:0; box-sizing:border-box; overflow-y:auto; overflow-x:hidden; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
+      .pond {
+        --bd-accent:#2563eb; --bd-accent-2:#1d4ed8;
+        --bd-fg:var(--dsw-alias-label-primary); --bd-fg-2:var(--dsw-alias-label-secondary); --bd-fg-3:var(--dsw-alias-label-secondary);
+        --bd-line:var(--dsw-alias-border-l1); --bd-line-2:var(--dsw-alias-border-l2);
+        --bd-hover:var(--dsw-alias-bg-layer-2); --bd-surface:var(--dsw-alias-bg-layer-1); --bd-surface-2:var(--dsw-alias-bg-layer-2);
+        --bd-ok:#2ea043; --bd-warn:#d29922; --bd-err:#f85149;
+      }
+      /* 按钮：底色/字色明确给足，不靠未定义变量 */
+      .pond [data-bd-btn] { color:var(--bd-fg); background:transparent; border:1px solid var(--bd-line-2); border-radius:6px; height:32px; padding:0 12px; font-size:13px; font-family:inherit; cursor:pointer; }
+      .pond [data-bd-btn]:hover { background:var(--bd-hover); border-color:var(--bd-fg-3); }
+      .pond [data-bd-btn][data-primary] { background:var(--bd-accent); border-color:var(--bd-accent); color:#fff; }
+      .pond [data-bd-btn][data-primary]:hover { background:var(--bd-accent-2); }
+      .pond [data-bd-btn][disabled] { opacity:.45; cursor:not-allowed; }
+      /* 选中态（Tab / 关键词 / 徽标）明确蓝底白字，原来用的是 brand-primary + #fff，碰上浅色主题就是白底白字 */
+      .pond .pond-tab.on, .pond .pond-chip.on { background:var(--bd-accent); border-color:var(--bd-accent); color:#fff; }
       .pond * { box-sizing:border-box; }
       .pond-hero { display:flex; gap:14px; align-items:center; padding:14px 16px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); border-radius:12px; }
       .pond-hero > img { width:46px; height:46px; border-radius:11px; flex:none; }
@@ -1925,8 +1940,8 @@ window.__ModuleLoader__.load({
       .pond-hero h1 { font-size:17px; margin:0; }
       .pond-say em { display:block; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); margin-top:3px; }
       .pond-acts { display:flex; gap:8px; flex:none; }
-      /* 按钮：不碰底色/字色（那是宿主的），只在悬停、按下、聚焦时加一圈发光 */
-      .pond [data-bd-btn] { transition:box-shadow .16s ease; }
+      /* 发光：悬停/按下/聚焦时加一圈蓝光（底色已在上面的调色板里给足） */
+      .pond [data-bd-btn] { transition:box-shadow .16s ease, background .12s ease, border-color .12s ease; }
       .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40) !important; }
       .pond [data-bd-btn]:active { box-shadow:0 0 0 3px rgba(37,99,235,.50), 0 0 22px rgba(37,99,235,.55) !important; }
       .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38) !important; }
@@ -2226,7 +2241,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.4',
+              ' · v1.3.5',
             ]),
           ]),
         ]),

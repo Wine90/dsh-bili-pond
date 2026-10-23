@@ -1927,9 +1927,9 @@ window.__ModuleLoader__.load({
       .pond-acts { display:flex; gap:8px; flex:none; }
       /* 按钮：不碰底色/字色（那是宿主的），只在悬停、按下、聚焦时加一圈发光 */
       .pond [data-bd-btn] { transition:box-shadow .16s ease; }
-      .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40); }
-      .pond [data-bd-btn]:active { box-shadow:0 0 0 3px rgba(37,99,235,.50), 0 0 22px rgba(37,99,235,.55); }
-      .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38); }
+      .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40) !important; }
+      .pond [data-bd-btn]:active { box-shadow:0 0 0 3px rgba(37,99,235,.50), 0 0 22px rgba(37,99,235,.55) !important; }
+      .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38) !important; }
       .pond [data-bd-btn][disabled] { box-shadow:none; cursor:not-allowed; }
       /* 左下角入口：同样是原样 + 发光 */
       .pond-entry { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 8px; border:0; border-radius:6px;
@@ -2201,6 +2201,7 @@ window.__ModuleLoader__.load({
       ].map((t) => h('span', { key: t[0], className: 'pond-tab' + (tab === t[0] ? ' on' : ''), onClick: () => setTab(t[0]) }, t[1])))
 
       return h('div', { className: 'pond' }, [
+        h('style', { key: 'css' }, POND_CSS),
         h('div', { key: 'hero', className: 'pond-hero' }, [
           h('img', { key: 'i', className: 'pond-ava', src: (d.account && d.account.face) ? d.account.face : POND_ICON, alt: '' }),
           h('div', { key: 'w', className: 'pond-who' }, [
@@ -2225,7 +2226,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.3',
+              ' · v1.3.4',
             ]),
           ]),
         ]),

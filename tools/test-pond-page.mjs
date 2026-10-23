@@ -35,7 +35,12 @@ ok('页面样式拼进了同一个 style', /style\.textContent = CSS \+ POND_CSS
 ok('图标是内联 PNG data URI', /const POND_ICON = 'data:image\/png;base64,[A-Za-z0-9+/=]{200,}'/.test(client))
 ok('页面只发一个请求拿全量', /jget\('\/pond\?limit=120'\)/.test(client))
 ok('页面有四个 Tab', /\['history', '历史'\], \['memory', '记忆'\], \['diary', '日记'\], \['settings', '设置'\]/.test(client))
-ok('署名（变量探索 + GitHub + Gitee）在页头', /变量探索 · '[\s\S]{0,200}github\.com\/YOYOLnFu\/dsh-bili-pond[\s\S]{0,200}gitee\.com\/YOYOLnFu\/bilibili/.test(client))
+ok('中文名是「B站鱼塘」', /label: 'B站鱼塘'/.test(client) && /\['B站鱼塘', h\('span'/.test(client))
+ok('署名：变量探索SEQVEC 链到 B站空间', /space\.bilibili\.com\/14430149[\s\S]{0,120}变量探索SEQVEC/.test(client))
+ok('GitHub 链接保留', /github\.com\/YOYOLnFu\/dsh-bili-pond/.test(client))
+ok('Gitee 链接已去掉', !/gitee\.com\/YOYOLnFu\/bilibili/.test(client))
+ok('主按钮写死蓝底白字（不依赖主题 token）', /\.pond-btn\.primary, \.pond \.pond-btn\.primary:hover[\s\S]{0,160}background:#2563eb/.test(client))
+ok('右侧记录默认限高、可展开', /\.pond-list\.cap \{ max-height/.test(client) && /const sideBlock = \(key, title, rows, empty\)/.test(client))
 ok('设置 Tab 复用原来的设置页', /h\(Panel\)/.test(client))
 
 ok('宿主有 /api/bili-pond/pond 路由', /path === '\/api\/bili-pond\/pond'/.test(host))

@@ -1918,7 +1918,13 @@ window.__ModuleLoader__.load({
       .pond-say em { display:block; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); margin-top:3px; }
       .pond-acts { display:flex; gap:8px; flex:none; }
       .pond-btn { height:30px; padding:0 13px; border-radius:7px; border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font-size:12.5px; cursor:pointer; }
-      .pond-btn.primary { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); color:#fff; }
+      .pond .pond-btn { color:var(--dsw-alias-label-primary); }
+      .pond .pond-btn:hover { background:var(--dsw-alias-bg-layer-1); }
+      .pond .pond-btn.primary, .pond .pond-btn.primary:hover, .pond .pond-btn.primary:active, .pond .pond-btn.primary:focus {
+        background:#2563eb; border-color:#2563eb; color:#fff; font-weight:500;
+      }
+      .pond .pond-btn.primary:hover { background:#1d4ed8; border-color:#1d4ed8; }
+      .pond .pond-btn.primary[disabled] { background:#2563eb; color:#fff; }
       .pond-btn[disabled] { opacity:.5; cursor:default; }
       .pond-strip { display:flex; gap:15px; align-items:center; font-size:12.5px; color:var(--dsw-alias-label-secondary); padding:9px 14px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
       .pond-strip b { color:var(--dsw-alias-label-primary); font-weight:600; }
@@ -1956,6 +1962,11 @@ window.__ModuleLoader__.load({
       .pond-v h3 { font-size:12.5px; line-height:1.45; margin:8px 9px 5px; height:36px; overflow:hidden; font-weight:500; }
       .pond-v p { display:flex; gap:7px; margin:0 9px 9px; font-size:11px; color:var(--dsw-alias-label-tertiary); white-space:nowrap; overflow:hidden; }
       .pond-list { font-size:12px; color:var(--dsw-alias-label-secondary); }
+      .pond-list.cap { max-height:166px; overflow:hidden; }
+      .pond-list.cap.open { max-height:none; }
+      .pond-sh { display:flex; align-items:center; gap:8px; }
+      .pond-sh h2 { margin:0 0 6px; }
+      .pond-more { margin-left:auto; font-size:11px; color:var(--dsw-alias-link); cursor:pointer; margin-bottom:6px; }
       .pond-list > div { padding:5px 0; border-bottom:1px dashed var(--dsw-alias-border-l1); }
       .pond-list > div:last-child { border-bottom:0; }
       .pond-row { display:flex; gap:7px; align-items:baseline; white-space:nowrap; overflow:hidden; }
@@ -1975,7 +1986,7 @@ window.__ModuleLoader__.load({
 
     function PondIcon({ size = 20, active }) {
       return h('img', {
-        src: POND_ICON, alt: '大肥鱼', width: size, height: size,
+        src: POND_ICON, alt: 'B站鱼塘', width: size, height: size,
         style: { borderRadius: Math.round(size / 4), display: 'block', opacity: active ? 1 : 0.85 },
       })
     }
@@ -1984,8 +1995,8 @@ window.__ModuleLoader__.load({
       /* 侧栏底部那个入口（宿主原文：Optional actions beside Settings at the sidebar foot） */
       return h('button', {
         className: 'pond-btn', style: { height: 26, padding: '0 10px', fontSize: 12 },
-        onClick: () => openPond(POND_ID), title: '打开大肥鱼',
-      }, '🐟 大肥鱼')
+        onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
+      }, '🐟 B站鱼塘')
     }
 
     function PondPage() {
@@ -2097,6 +2108,20 @@ window.__ModuleLoader__.load({
         ]))
         : h('div', { className: 'pond-empty' }, '还没有记住什么。等值班轮跑完、日报写出来，这里会慢慢攒起来。')
 
+      /* 右侧三块记录：默认限高，条数多时给「展开」，避免把右栏拉得比左栏长一大截 */
+      const sideBlock = (key, title, rows, empty) => {
+        const k = 'side:' + key
+        const open = !!fold[k]
+        const has = rows && rows.length
+        return h('div', { key }, [
+          h('div', { key: 'h', className: 'pond-sh' }, [
+            h('h2', { key: 't' }, title),
+            has ? h('span', { key: 'x', className: 'pond-more', onClick: () => setFold(Object.assign({}, fold, { [k]: !open })) }, open ? '收起' : '展开') : null,
+          ]),
+          h('div', { key: 'l', className: 'pond-list cap' + (open ? ' open' : '') }, has ? rows : h('div', { className: 'pond-empty' }, empty)),
+        ])
+      }
+
       const diaryText = (d.diary && d.diary.text) || ''
       const settingsTab = h('div', { className: 'pond-card' }, h(Panel))
 
@@ -2142,10 +2167,10 @@ window.__ModuleLoader__.load({
           ]),
           h('div', { key: 'days', className: 'pond-card', style: { paddingTop: 4 } }, dayGroups.length ? dayGroups : h('div', { className: 'pond-empty' }, '还没有历史记录。跑一轮值班，这里就会出现封面墙。')),
         ]),
-        h('div', { key: 'r', className: 'pond-card', style: { display: 'flex', flexDirection: 'column', gap: 12 } }, [
-          h('div', { key: 'l1' }, [h('h2', null, '守护记录'), h('div', { className: 'pond-list' }, sideLog.length ? sideLog : h('div', { className: 'pond-empty' }, '还没扫过'))]),
-          h('div', { key: 'l2' }, [h('h2', null, '回复记录'), h('div', { className: 'pond-list' }, sideReply.length ? sideReply : h('div', { className: 'pond-empty' }, '还没有回复记录'))]),
-          h('div', { key: 'l3' }, [h('h2', null, '鱼记得'), h('div', { className: 'pond-list' }, memoryList)]),
+        h('div', { key: 'r', className: 'pond-card', style: { display: 'flex', flexDirection: 'column', gap: 14 } }, [
+          sideBlock('log', '守护记录', sideLog, '还没扫过'),
+          sideBlock('reply', '回复记录', sideReply, '还没有回复记录'),
+          sideBlock('mem', '鱼记得', (d.memory || []).length ? memoryList : null, '还没记住什么'),
         ]),
       ])
 
@@ -2167,12 +2192,11 @@ window.__ModuleLoader__.load({
         h('div', { key: 'hero', className: 'pond-hero' }, [
           h('img', { key: 'i', src: POND_ICON, alt: '' }),
           h('div', { key: 'w', className: 'pond-who' }, [
-            h('h1', { key: 'h' }, ['大肥鱼', h('span', { key: 'en' }, 'Bili Pond')]),
+            h('h1', { key: 'h' }, ['B站鱼塘', h('span', { key: 'en' }, 'Bili Pond')]),
             h('div', { key: 'by', className: 'pond-by' }, [
-              '变量探索 · ',
-              h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
+              h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
-              h('a', { key: 'ge', href: 'https://gitee.com/YOYOLnFu/bilibili', target: '_blank', rel: 'noreferrer' }, 'Gitee'),
+              h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
               ' · v1.3.2',
             ]),
             h('div', { key: 'lv', className: 'pond-lv' }, [
@@ -2199,7 +2223,7 @@ window.__ModuleLoader__.load({
         ]),
         tabBar,
         tab === 'history' ? historyTab : tab === 'memory' ? memoryTab : tab === 'diary' ? diaryTab : settingsTab,
-        h('div', { key: 'foot', className: 'pond-foot' }, '大肥鱼 · Bili Pond · 变量探索 · 数据和开关都在这一页，设置页里也能进'),
+        h('div', { key: 'foot', className: 'pond-foot' }, 'B站鱼塘 · Bili Pond · 变量探索SEQVEC · 数据和开关都在这一页'),
       ])
     }
 
@@ -2228,7 +2252,7 @@ window.__ModuleLoader__.load({
           } catch (e) { /* 拿不到 layout 就只留图标入口，不影响页面本身 */ }
         }
         slots.inject('sidebar.panellist', () => slots.register(
-          { name: 'sidebar.panellist', id: POND_ID, order: 5, label: '大肥鱼' },
+          { name: 'sidebar.panellist', id: POND_ID, order: 5, label: 'B站鱼塘' },
           () => h(PondIcon),
         ))
         slots.inject('main', () => slots.register(
@@ -2236,7 +2260,7 @@ window.__ModuleLoader__.load({
           () => h(PondPage),
         ))
         slots.inject('sidebar.footer.action', () => slots.register(
-          { name: 'sidebar.footer.action', id: POND_ID + '-entry', order: 20, label: '大肥鱼' },
+          { name: 'sidebar.footer.action', id: POND_ID + '-entry', order: 20, label: 'B站鱼塘' },
           () => h(PondEntry),
         ))
       },

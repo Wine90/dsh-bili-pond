@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
 [data-bd-page]{
   display:flex;flex-direction:column;gap:16px;
   max-width:720px;padding:2px 0 28px;
-  height:100%;max-height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;
+  max-height:calc(100vh - 140px);overflow-y:auto;overflow-x:hidden;padding-right:6px;
   color:var(--bd-fg);font-size:13px;line-height:20px;
   -webkit-font-smoothing:antialiased;
 }
@@ -2244,7 +2244,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.6',
+              ' · v1.3.7',
             ]),
           ]),
         ]),

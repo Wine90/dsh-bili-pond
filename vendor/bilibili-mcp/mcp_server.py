@@ -405,10 +405,215 @@ async def bili_comments(bvid: str, num: int = 30, order: str = "like") -> str:
             fetch_error = f"{type(e).__name__}: {e}"
             break
 
-    out = {"bvid": bvid, "count": len(comments[:num]), "comments": comments[:num]}
+    owner = info.get("owner") or {}
+    out = {
+        "bvid": bvid,
+        "count": len(comments[:num]),
+        "comments": comments[:num],
+        "owner": owner.get("name", ""),
+        "owner_mid": int(owner.get("mid", 0) or 0),
+    }
     if fetch_error:
         out["error"] = fetch_error
     return json.dumps(out, ensure_ascii=False)
+
+
+# ========== 圈地自萌：只回 UP 主主动邀请的楼中楼 ==========
+# 规则（用户 2026-10-23 定）：
+#   · 开启后绝不发新楼；
+#   · 只认视频 UP 主本人发的一级评论；
+#   · 多条鱼可以回同一个邀请，不做跨用户唯一性协调；
+#   · 同一个账号对同一个 (BV, 邀请 rpid) 只回一次。
+
+_CIRCLE_NEG = re.compile(r"别来|不要来|不用来|别刷|不要刷|别评论|不要评论|别回|不要回|不欢迎|禁止|滚")
+_CIRCLE_POS = (
+    re.compile(r"(?:大肥鱼|鱼塘(?:的鱼)?)[^。！？!?\n]{0,16}(?:快来|来评论|来玩|过来|来)(?!了|过|着|没|吗)"),
+    re.compile(r"(?:^|[\s@])(?:快来|来)[^。！？!?\n]{0,12}(?:大肥鱼|鱼塘)"),
+    re.compile(r"(?:^|[\s@])鱼(?:快来|来)(?:评论区|楼中楼|玩)?(?!了|过|着|没|吗)(?:[\s，,。.!！?？]|$)"),
+)
+
+
+def _circle_invite_match(text: str) -> tuple[bool, str]:
+    """判断评论是否是对大肥鱼的邀请。否定语义优先级最高。"""
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not value:
+        return False, "empty"
+    if _CIRCLE_NEG.search(value):
+        return False, "negative"
+    if any(p.search(value) for p in _CIRCLE_POS):
+        return True, "invite"
+    return False, "not-invite"
+
+
+async def _circle_scan_raw(bvid: str, num: int = 100, order: str = "time") -> dict:
+    """抓一级评论，并带上视频 UP 的 mid；圈地自萌只认这个 mid。"""
+    cred = get_cred()
+    v = video.Video(bvid=bvid, credential=cred)
+    info = await v.get_info()
+    aid = int(info.get("aid", 0) or 0)
+    owner = info.get("owner") or {}
+    owner_mid = int(owner.get("mid", 0) or 0)
+    order_enum = comment.OrderType.TIME if str(order).lower() == "time" else comment.OrderType.LIKE
+    limit = max(1, min(int(num or 100), 100))
+    comments = []
+    error = None
+    page = 1
+    while len(comments) < limit:
+        try:
+            resp = await comment.get_comments(
+                oid=aid,
+                type_=comment.CommentResourceType.VIDEO,
+                page_index=page,
+                order=order_enum,
+                credential=cred,
+            )
+            replies = resp.get("replies") or []
+            if not replies:
+                break
+            for r in replies:
+                member = r.get("member") or {}
+                content = r.get("content") or {}
+                comments.append({
+                    "rpid": int(r.get("rpid", 0) or 0),
+                    "mid": int(member.get("mid", 0) or 0),
+                    "user": member.get("uname", ""),
+                    "content": content.get("message", ""),
+                    "time": int(r.get("ctime", 0) or 0),
+                    "reply_count": int(r.get("rcount", 0) or 0),
+                })
+            page += 1
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            break
+    return {
+        "aid": aid,
+        "owner": owner.get("name", ""),
+        "owner_mid": owner_mid,
+        "comments": comments[:limit],
+        "error": error,
+    }
+
+
+def _circle_has_replied(bvid: str, rpid: int) -> bool:
+    try:
+        f = _DUTY_HOME / "circle-log.jsonl"
+        if not f.exists():
+            return False
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+                if e.get("ok") is True and str(e.get("bvid")) == str(bvid) and int(e.get("rpid") or 0) == int(rpid):
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def _circle_log_append(entry: dict) -> None:
+    try:
+        f = _DUTY_HOME / "circle-log.jsonl"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(f, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps({**entry, "ts": int(time.time() * 1000)}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+@tool()
+async def bili_circle_scan(bvid: str, num: int = 60) -> str:
+    """圈地自萌：只扫描视频 UP 主本人发出的一级邀请评论。
+
+    不会发任何评论。返回的 invites 可直接交给 bili_circle_reply。
+    普通用户说的「鱼来」不算；带否定语义的也不算。
+    """
+    data = await _circle_scan_raw(bvid, num=num, order="time")
+    invites = []
+    for c in data["comments"]:
+        if c["mid"] != data["owner_mid"] or data["owner_mid"] <= 0:
+            continue
+        ok, why = _circle_invite_match(c["content"])
+        if ok:
+            invites.append({**c, "match": why, "already_replied": _circle_has_replied(bvid, c["rpid"])})
+    return json.dumps({
+        "bvid": bvid,
+        "owner": data["owner"],
+        "owner_mid": data["owner_mid"],
+        "scanned": len(data["comments"]),
+        "invites": invites,
+        "error": data.get("error") or "",
+    }, ensure_ascii=False)
+
+
+@tool()
+async def bili_circle_reply(bvid: str, rpid: int, text: str) -> str:
+    """圈地自萌专用：只回复 UP 主邀请评论的楼中楼（硬闸）。
+
+    rpid 必须是视频 UP 主本人发的一级评论，且正文是邀请；否则拒绝。
+    永远不使用新楼。同一个账号对同一 (BV, rpid) 只允许成功回复一次。
+    """
+    target = int(rpid or 0)
+    body = str(text or "").strip()
+    if target <= 0:
+        return json.dumps({"success": False, "error": "圈地自萌拒绝新楼：rpid 必须指向 UP 邀请评论"}, ensure_ascii=False)
+    if not body:
+        return json.dumps({"success": False, "error": "回复正文不能为空"}, ensure_ascii=False)
+    if _circle_has_replied(bvid, target):
+        return json.dumps({"success": False, "error": "这个邀请已经回复过，跳过"}, ensure_ascii=False)
+
+    found = None
+    data = await _circle_scan_raw(bvid, num=100, order="time")
+    for c in data["comments"]:
+        if int(c.get("rpid") or 0) == target:
+            found = c
+            break
+    if found is None:
+        # 置顶邀请可能比较早，再按热度扫一遍。
+        data2 = await _circle_scan_raw(bvid, num=100, order="like")
+        for c in data2["comments"]:
+            if int(c.get("rpid") or 0) == target:
+                found = c
+                if not data.get("owner_mid"):
+                    data = data2
+                break
+    if found is None:
+        return json.dumps({"success": False, "error": "没在前 100 条一级评论里找到目标，按安全闸拒绝"}, ensure_ascii=False)
+    if int(found.get("mid") or 0) != int(data.get("owner_mid") or 0) or int(data.get("owner_mid") or 0) <= 0:
+        return json.dumps({"success": False, "error": "目标评论不是视频 UP 主本人发的，拒绝"}, ensure_ascii=False)
+    ok, why = _circle_invite_match(found.get("content", ""))
+    if not ok:
+        return json.dumps({"success": False, "error": "目标评论不是邀请（" + why + "），拒绝"}, ensure_ascii=False)
+    ctime = int(found.get("time") or 0)
+    if ctime and time.time() - ctime > 7 * 86400:
+        return json.dumps({"success": False, "error": "邀请超过 7 天，按安全闸拒绝"}, ensure_ascii=False)
+
+    cred = get_cred()
+    try:
+        result = await comment.send_comment(
+            text=body,
+            oid=int(data["aid"]),
+            type_=comment.CommentResourceType.VIDEO,
+            root=target,
+            parent=target,
+            credential=cred,
+        )
+        out = {"success": True, "message": "已回到 UP 邀请的楼中楼", "bvid": bvid, "rpid": target}
+        if isinstance(result, dict):
+            for key in ("rpid", "rpid_str", "root", "parent"):
+                val = result.get(key)
+                if isinstance(val, (int, str)) and str(val).strip() and str(val) != "0":
+                    out[key] = val
+        _circle_log_append({"ok": True, "bvid": bvid, "rpid": target, "new_rpid": out.get("rpid"), "text": body,
+                            "invite": found.get("content", ""), "owner_mid": data.get("owner_mid")})
+        _guard_log({"type": "circle-reply", "ok": True, "bvid": bvid, "rpid": target,
+                    "new_rpid": out.get("rpid"), "text": body})
+        return json.dumps(out, ensure_ascii=False)
+    except Exception as e:
+        _circle_log_append({"ok": False, "bvid": bvid, "rpid": target, "text": body,
+                            "invite": found.get("content", ""), "error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 # ========== Tool 3: 获取字幕 ==========
@@ -579,6 +784,8 @@ async def bili_reply(bvid: str, text: str, rpid: int = 0, root: int = 0) -> str:
     Returns:
         发表结果
     """
+    if rpid == 0 and os.environ.get("BILI_CIRCLE_MODE") == "1":
+        return json.dumps({"success": False, "error": "圈地自萌开启：禁止发表任何新楼评论"}, ensure_ascii=False)
     cred = get_cred()
     v = video.Video(bvid=bvid, credential=cred)
     info = await v.get_info()

@@ -41,6 +41,9 @@
   根因是 Electron 里 spawn 的 node 少了 `ELECTRON_RUN_AS_NODE=1`，且 `dsh` CLI 不在 PATH 上。
   现在会带那个环境变量、并去应用目录里找 dsh；**还找不到就在 `duty.log` 里明说**
   "请在设置里把 dsh 路径指过去"（不再静默失败）。
+- ⭐⭐ **桌面版值班提示词被 `cmd.exe` 截断**：旧回退用 `shell:true` 启动 `dsh`，多行 prompt 只保留第一行，
+  配额、圈地、私信等本轮指令都送不到模型。现在直接启动 `app.asar/dsh/.../dsh-desktop-host/lib/cli.js`
+  并保持 `shell:false`；任何多行 prompt 再走 shell 都会拒绝启动。
 - **桌面版上"自动跑会卡"**：跑那一轮是 `dsh --profile headless --patch <overlay> <prompt>` ——
   先确认 dsh 版本与 profile，别硬跑；跑不起来就先只用手动「立即运行一轮」。
 - **别让用户自己去装环境** ✗：插件自带 uv 与依赖安装能力，先照上面第 1 条处理。

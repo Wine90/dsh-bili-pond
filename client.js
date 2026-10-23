@@ -84,9 +84,25 @@ window.__ModuleLoader__.load({
 }
 [data-bd-page] *{box-sizing:border-box;}
 
+/* ══ 设置页自适应网格：按内容列宽度重排，不依赖整个窗口宽度 ══════════ */
+[data-bd-page][data-bd-layout]{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));
+  gap:16px;align-items:start;width:100%;max-width:none;
+}
+[data-bd-page][data-bd-layout] > [data-bd-metrics],
+[data-bd-page][data-bd-layout] > [data-bd-toolbar],
+[data-bd-page][data-bd-layout] > [data-bd-guide],
+[data-bd-page][data-bd-layout] > [data-bd-msg],
+[data-bd-page][data-bd-layout] > [data-bd-foot],
+[data-bd-page][data-bd-layout] > [data-bd-wide]{grid-column:1 / -1;}
+[data-bd-page][data-bd-layout] > [data-bd-divider]{display:none;}
+[data-bd-page][data-bd-layout] > [data-bd-card]{min-width:0;}
+/* 鱼塘大页里的设置用单列：卡片高度差很大，双列网格会为最高卡留出一整行空白。 */
+[data-bd-page][data-bd-layout="embedded"]{grid-template-columns:minmax(0,1fr);}
+
 /* ══ 指标栏 ═════════════════════════════════════════════════════════════ */
 [data-bd-metrics]{
-  display:grid;grid-template-columns:1fr 1fr 1fr 1fr;
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
   border:1px solid var(--bd-line);border-radius:10px;overflow:hidden;
   background:var(--bd-surface);
 }
@@ -129,14 +145,15 @@ window.__ModuleLoader__.load({
 
 /* ══ 行：标签左 / 控件右 ═════════════════════════════════════════════════ */
 [data-bd-row]{
-  display:flex;align-items:center;gap:20px;
+  display:flex;align-items:center;flex-wrap:wrap;gap:20px 16px;
   padding:10px 0;min-height:44px;
 }
 [data-bd-row] + [data-bd-row]{border-top:1px solid var(--bd-line);}
-[data-bd-row-main]{flex:1;min-width:0;}
+[data-bd-row-main]{flex:1 1 220px;min-width:0;}
 [data-bd-row-label]{font-size:13px;font-weight:500;line-height:19px;color:var(--bd-fg);}
 [data-bd-row-desc]{font-size:12px;line-height:18px;color:var(--bd-fg-3);margin-top:2px;}
-[data-bd-row-ctl]{flex:none;display:flex;align-items:center;gap:8px;}
+[data-bd-row-ctl]{flex:0 1 auto;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;max-width:100%;margin-left:auto;}
+[data-bd-row-ctl] > *{max-width:100%;}
 [data-bd-row][data-bd-stack]{flex-direction:column;align-items:stretch;gap:8px;}
 [data-bd-row][data-bd-stack] [data-bd-row-ctl]{width:100%;}
 
@@ -185,6 +202,9 @@ window.__ModuleLoader__.load({
 [data-bd-w-sm]{width:150px;}
 [data-bd-w-md]{width:230px;}
 [data-bd-w-full]{width:100%;}
+[data-bd-inline]{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;max-width:100%;}
+[data-bd-inline] [data-bd-w-full]{flex:1 1 240px;width:auto;min-width:0;}
+[data-bd-inline-sep]{flex:none;color:var(--bd-fg-3);}
 
 /* ══ 开关 ═══════════════════════════════════════════════════════════════ */
 [data-bd-sw]{
@@ -361,11 +381,13 @@ window.__ModuleLoader__.load({
   [data-bd-metrics]{grid-template-columns:1fr 1fr;}
   [data-bd-metric]:nth-child(3){border-left:0;}
   [data-bd-metric]:nth-child(n+3){border-top:1px solid var(--bd-line);}
-  [data-bd-row]{gap:12px;}
+  [data-bd-row]{align-items:flex-start;gap:8px 12px;}
+  [data-bd-row-main]{flex-basis:100%;}
+  [data-bd-row-ctl]{width:100%;justify-content:flex-start;margin-left:0;}
+  [data-bd-inline]{justify-content:flex-start;}
   [data-bd-card-body]{padding-left:14px;padding-right:14px;}
   [data-bd-card-head]{padding-left:14px;padding-right:14px;}
-  [data-bd-w-sm]{width:120px;}
-  [data-bd-w-md]{width:170px;}
+  [data-bd-w-sm],[data-bd-w-md]{width:100%;}
   [data-bd-btns] [data-bd-btn]{flex:1 1 auto;}
 }
 `
@@ -429,8 +451,8 @@ window.__ModuleLoader__.load({
     }
 
     /** 分组卡片：标题栏 + 正文 */
-    function Card({ title, desc, children }) {
-      return h('div', { 'data-bd-card': '' },
+    function Card({ title, desc, children, wide }) {
+      return h('div', { 'data-bd-card': '', 'data-bd-wide': wide ? '' : undefined },
         (title || desc) ? h('div', { 'data-bd-card-head': '' },
           title ? h('div', { 'data-bd-card-title': '' }, title) : null,
           desc ? h('div', { 'data-bd-card-desc': '' }, desc) : null) : null,
@@ -642,7 +664,7 @@ window.__ModuleLoader__.load({
 
     /* ────────────── 设置页正文 ────────────── */
 
-    function Panel() {
+    function Panel({ layout = 'settings', onConfigChanged } = {}) {
       const [st, setSt] = useStatus(5000)
       const [busy, setBusy] = React.useState('')
       const [saving, setSaving] = React.useState(false)
@@ -860,6 +882,13 @@ window.__ModuleLoader__.load({
         setRunNote(text ? { t: text, tone: tone || '' } : null)   // ⭐ 同时镜像到顶部
       }
 
+      /* 设置页保存 / 绑定后，把新配置同步给外层的鱼塘首页；否则首页快捷区会一直拿着旧快照。 */
+      const applyConfigPatch = (p) => {
+        if (!p) return
+        setSt((old) => old ? { ...old, config: { ...(old.config || {}), ...p } } : old)
+        onConfigChanged?.(p)
+      }
+
       /* ⚠️ 并发保存的最后一笔才算数：响应乱序时，晚到的旧 config 会把新的盖回去。 */
       const patchSeq = React.useRef(0)
       const patch = async (p, what) => {
@@ -868,7 +897,7 @@ window.__ModuleLoader__.load({
         setBusy(JSON.stringify(p))
         try {
           const r = await jpost('/config', p)
-          if (r?.config && seq === patchSeq.current) setSt((old) => ({ ...old, config: r.config }))
+          if (r?.config && seq === patchSeq.current) applyConfigPatch({ ...(r.config || {}), ...p })
           // ⭐ DSH 原生设置页里显式设过的键由宿主说了算 ⇒ 我们这份也得写进去；写失败要说出来，别假装"已保存"
           // ⚠️ noForm 不算失败：那个部署本来就没有可写的设置表单，配置就只存在插件这边
           if (r?.host && r.host.ok === false && !r.host.noForm) say(`${what || '设置'}：已保存到插件配置，但同步到 DSH 设置失败（${r.host.error}）`, 'warn')
@@ -1037,6 +1066,7 @@ window.__ModuleLoader__.load({
           if (r?.ok) {
             setMention(r.name)
             setMentionInfo({ name: r.name, level: r.level })
+            applyConfigPatch({ mentionUid: uid, mentionName: r.name })
             say('已识别：' + r.name, 'good')
           } else {
             setMentionInfo({ error: r?.error || '解析失败' })
@@ -1056,7 +1086,7 @@ window.__ModuleLoader__.load({
         setDmBusy(true); setDmInfo(null)
         try {
           const r = await jpost('/resolve-user', { uid, target: 'dm' })
-          if (r?.ok) { setDmInfo({ name: r.name, level: r.level }); say('私信收件人：' + r.name, 'good') }
+          if (r?.ok) { setDmInfo({ name: r.name, level: r.level }); applyConfigPatch({ dmUid: uid }); say('私信收件人：' + r.name, 'good') }
           else { setDmInfo({ error: r?.error || '解析失败' }); say(r?.error || '解析失败', 'warn') }
         } catch (e) { setDmInfo({ error: String(e?.message ?? e) }) }
         finally { setDmBusy(false) }
@@ -1082,10 +1112,10 @@ window.__ModuleLoader__.load({
 
       /* ── 加载态：给骨架，别只丢一句"读设置中…" ── */
       if (!cfg) {
-        return h('div', { 'data-bd-page': '' },
-          h('div', { 'data-bd-skeleton': '' },
+        return h('div', { 'data-bd-page': '', 'data-bd-layout': layout },
+          h('div', { 'data-bd-skeleton': '', 'data-bd-wide': '' },
             h('div', { 'data-bd-sk-narrow': '' }), h('div'), h('div'), h('div')),
-          h('div', { 'data-bd-row-desc': '' }, '正在加载设置…（若长时间停留在此，请查看 duty.log）'))
+          h('div', { 'data-bd-row-desc': '', 'data-bd-wide': '' }, '正在加载设置…（若长时间停留在此，请查看 duty.log）'))
       }
 
       const sw = (k) => Boolean(cfg[k])
@@ -1117,14 +1147,17 @@ window.__ModuleLoader__.load({
       /* ⭐ 本轮实际会投递什么 —— 评论与私信是两个**独立开关**，判据与宿主端一致
        *   （index.js 的 commentOn = autoComment && mentionName、dmOn = dmOn && dmUid） */
       const dmActive = Boolean(dmOn && Number(dmUid) > 0)
-      const commentActive = Boolean(sw('autoComment') && cfg.mentionName)
-      const deliverNow = !commentActive && !dmActive
-        ? '只生成报告，不发布任何内容'
-        : (commentActive && dmActive
-          ? '评论 + 私信'
-          : (commentActive ? '只发公开评论' : '只发私信'))
+      const circleActive = Boolean(cfg.circleMode)
+      const commentActive = Boolean(!circleActive && sw('autoComment') && cfg.mentionName)
+      const deliverNow = circleActive
+        ? (dmActive ? '圈地自萌楼中楼 + 私信' : '只回 UP 邀请的楼中楼')
+        : (!commentActive && !dmActive
+          ? '只生成报告，不发布任何内容'
+          : (commentActive && dmActive
+            ? '评论 + 私信'
+            : (commentActive ? '只发公开评论' : '只发私信')))
 
-      return h('div', { 'data-bd-page': '' },
+      return h('div', { 'data-bd-page': '', 'data-bd-layout': layout },
 
         /* ══ ① 指标栏 ══════════════════════════════════════════════════ */
         /* 指标栏：三个就够了 —— 「环境」和「状态」原来分成两格，
@@ -1152,6 +1185,7 @@ window.__ModuleLoader__.load({
            *    用户手动点过就记住他的选择（runLogFold !== null 之后一律听他的）。 */
           const foldOpen = runLogFold !== null ? runLogFold : Boolean(st.running)
           return h(Card, {
+            wide: true,
             title: '本轮进度',
             desc: st.running
               ? `跑着（${st.runWhy === 'manual' ? '手动' : st.runWhy || '自动'}）· 已用时 ${mm}:${ss}${L.stage ? ' · 当前：' + L.stage : ''}`
@@ -1181,13 +1215,13 @@ window.__ModuleLoader__.load({
         h('div', { 'data-bd-toolbar': '' },
           h('button', {
             'data-bd-btn': '', 'data-primary': '',
-            disabled: busy === 'run' || Boolean(st.running),
+            disabled: busy === 'run' || Boolean(st.running) || Boolean(st.finalizing),
             onClick: onRun,
           }, busy === 'run'
             ? '启动中…'
             : (st.running
               ? `运行中…${st.runElapsedSec ? ' ' + Math.floor(st.runElapsedSec / 60) + ':' + String(st.runElapsedSec % 60).padStart(2, '0') : ''}`
-              : '立即运行一轮')),
+              : (st.finalizing ? '收尾中…' : '立即运行一轮'))),
           h('button', {
             'data-bd-btn': '', disabled: busy === 'report', onClick: onShowReport,
           }, report !== null ? '收起报告' : '查看今日报告'),
@@ -1230,7 +1264,7 @@ window.__ModuleLoader__.load({
         /* 报告展开：放在工具栏下方，读报告时不用滚到底
          * ⭐ 2026-10-20：报告改成渲染 markdown（原来是 <pre> 原样显示，满屏星号）。
          *    报告是给人读的成品；日志才是原始终端输出，仍旧用 <pre>。 */
-        report !== null ? h(Card, { title: '今日报告' },
+        report !== null ? h(Card, { wide: true, title: '今日报告' },
           h('div', { 'data-bd-md': '' }, ...renderMarkdown(report))) : null,
 
         /* ══ ⑤ 自动运行（2026-10-20 重构） ═════════════════════════════
@@ -1394,29 +1428,31 @@ window.__ModuleLoader__.load({
           title: '发布与互动',
           desc: '发布内容以你的账号身份发出。默认关闭，仅生成报告',
         },
-          /* 三段式：关闭 / 只发评论 / 发评论+回楼中楼 */
+          /* 四段式：关闭 / 圈地自萌 / 普通评论 / 普通评论 + 回楼中楼 */
           h(Row, {
-            label: '评论行为',
+            label: '评论模式',
             desc: `本轮会做：${deliverNow}`,
           }, h('select', {
             'data-bd-select': '', 'data-bd-w-md': '',
-            value: !sw('autoComment') ? 'off' : (sw('replyToComments') ? 'reply' : 'comment'),
+            value: sw('circleMode') ? 'circle' : (!sw('autoComment') ? 'off' : (sw('replyToComments') ? 'reply' : 'comment')),
             onChange: (e) => {
               const v = e.target.value
-              if (v === 'off') patch({ autoComment: false, replyToComments: false }, '评论行为')
-              else if (v === 'comment') patch({ autoComment: true, replyToComments: false }, '评论行为')
-              else patch({ autoComment: true, replyToComments: true }, '评论行为')
+              if (v === 'off') patch({ autoComment: false, circleMode: false, replyToComments: false }, '评论行为')
+              else if (v === 'circle') patch({ autoComment: false, circleMode: true, replyToComments: false }, '圈地自萌')
+              else if (v === 'comment') patch({ autoComment: true, circleMode: false, replyToComments: false }, '评论行为')
+              else patch({ autoComment: true, circleMode: false, replyToComments: true }, '评论行为')
             },
           },
             h('option', { value: 'off' }, '关闭 —— 只在报告里给出结论'),
-            h('option', { value: 'comment' }, '发评论 —— 在选中的视频下发布一条'),
-            h('option', { value: 'reply' }, '发评论 + 回复楼中楼')
+            h('option', { value: 'circle' }, '圈地自萌 —— 只回 UP 邀请的楼中楼'),
+            h('option', { value: 'comment' }, '普通评论 —— 在选中的视频下发布新楼'),
+            h('option', { value: 'reply' }, '普通评论 + 回复楼中楼')
           )),
 
-          sw('autoComment') ? h('div', { 'data-bd-sub': '' },
+          (sw('autoComment') || sw('circleMode')) ? h('div', { 'data-bd-sub': '' },
             h(Row, {
-              label: '每轮评论上限',
-              desc: `设为 0 则本轮不发布评论。最多 ${commentCap} 条（跟着「每轮最多挑几条」走）`,
+              label: sw('circleMode') ? '每轮楼中楼上限' : '每轮评论上限',
+              desc: `设为 0 则本轮不发。最多 ${commentCap} 条（跟着「每轮最多挑几条」走）`,
             }, h('input', {
               'data-bd-input': '', 'data-bd-w-num': '', type: 'number', min: 0, max: commentCap,
               value: perRound ?? '',
@@ -1426,7 +1462,7 @@ window.__ModuleLoader__.load({
               //    评的就是挑中的那几条 —— 没东西可评。后端 clampPatch 也按同一条规矩钳一次。
               onBlur: () => { const n = Math.max(0, Math.min(Number(perRound) || 0, commentCap)); setPerRound(String(n)); patch({ commentPerRound: n }, '每轮评论上限') },
             })),
-            h(Row, {
+            sw('autoComment') ? h(Row, {
               label: '在评论里 @ 谁',
               desc: mention
                 ? `当前：@${mention}${mentionUid ? '（UID ' + mentionUid + '）' : ''}`
@@ -1446,7 +1482,8 @@ window.__ModuleLoader__.load({
                 'data-bd-btn': '', disabled: Boolean(mentionBusy),
                 onClick: onResolveUid,
               }, mentionBusy ? '识别中…' : '识别')),
-            )) : null,
+            ) : null,
+          ) : null,
 
           sw('replyToComments') ? h('div', { 'data-bd-sub': '' },
             h(Row, {
@@ -1655,7 +1692,7 @@ window.__ModuleLoader__.load({
             }, msg) : null)),
 
         /* ══ ⑨ 高级设置（可折叠） ═══════════════════════════════════════ */
-        h('div', { 'data-bd-card': '' },
+        h('div', { 'data-bd-card': '', 'data-bd-wide': '' },
           h('button', {
             'data-bd-fold': '', 'data-open': advOpen ? '' : undefined,
             onClick: () => setAdv(!advOpen),
@@ -1894,7 +1931,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /* ⭐⭐ 2026-10-23 大肥鱼整页（侧栏图标 + 主面板 + 侧栏底部入口）
+    /* ⭐⭐ 2026-10-23 大肥鱼整页（左上侧栏图标 + 主面板）
      * 宿主机制（cordis_inspect 查到的原文）：`sidebar.panellist` 是「Global panel icons.
      * Each list id addresses the matching main panel; the sidebar owns the button」，
      * `main` 是「Central panel selected by sidebar entry id」。
@@ -1910,20 +1947,8 @@ window.__ModuleLoader__.load({
            自动最小高度归零，被压到 509px，设置内容 1600+px 被静默裁掉（没有滚动条）。
            修法：.pond 的直接子卡片不裁剪、不压缩（flex:0 0 auto），内容撑开 .pond 由它统一滚动。 */
         .pond > .pond-card { overflow:visible; flex:0 0 auto; }
-        /* ⭐ 1.3.10 大页面设置区重排：宽屏两栏。分栏规则：
-           · 横跨整行（grid-column:1/-1）：指标栏 / 本轮进度 / 工具栏 / 各类提示条 / 今日报告 / 页脚 —— 顶部信息要完整宽度
-           · 卡片（[data-bd-card]）：默认单列宽，自动流填两栏（左高右矮自然错落），grid 不会压缩也不会裁剪
-           · Divider 在 grid 里没意义了 ⇒ display:none（栏间已有 16px 间距）
-           · 窄屏（<1100px）回退单列 */
-        .pond-settings [data-bd-page] { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; max-width:none; }
-        .pond-settings [data-bd-page] > [data-bd-metrics],
-        .pond-settings [data-bd-page] > [data-bd-toolbar],
-        .pond-settings [data-bd-page] > [data-bd-guide],
-        .pond-settings [data-bd-page] > [data-bd-msg],
-        .pond-settings [data-bd-page] > [data-bd-foot],
-        .pond-settings [data-bd-page] > [data-bd-card] { grid-column:1 / -1; }
-        .pond-settings [data-bd-page] > [data-bd-divider] { display:none; }
-        @media (max-width:1100px) { .pond-settings [data-bd-page] { grid-template-columns:1fr; } }
+        /* 1.3.12：设置页按自己的容器宽度重排；这里只取消 max-width，不再维护第二套 grid 规则。 */
+        .pond-settings [data-bd-page] { max-width:none; }
         /* 嵌进鱼塘页的设置页：外层 .pond 已经在滚，内层不再自己滚、不再另设高度（避免双层滚动条 + 被裁） */
         .pond [data-bd-page]{ max-height:none; overflow:visible; padding-right:0; }
       .pond {
@@ -1953,28 +1978,50 @@ window.__ModuleLoader__.load({
       .pond-lv { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--dsw-alias-label-secondary); margin-top:6px; }
       .pond-lv .track { flex:1; height:5px; border-radius:3px; background:var(--dsw-alias-bg-layer-2); overflow:hidden; }
       .pond-lv .track b { display:block; height:100%; background:var(--dsw-alias-brand-primary); border-radius:3px; }
-      .pond-say { flex:1; min-width:0; font-size:13px; line-height:1.6; color:var(--dsw-alias-label-secondary); }
+      .pond-say { flex:1; min-width:0; text-align:center; font-size:13px; line-height:1.6; color:var(--dsw-alias-label-secondary); }
       .pond-ava { width:52px; height:52px; border-radius:14px; object-fit:cover; flex:none; background:var(--dsw-alias-bg-layer-2); }
-      .pond-acts { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
       .pond-meta { font-size:11px; line-height:1.6; color:var(--dsw-alias-label-tertiary); text-align:right; white-space:nowrap; }
       .pond-meta a { color:var(--dsw-alias-label-secondary); text-decoration:none; }
       .pond-meta a:hover { color:var(--dsw-alias-brand-primary); text-decoration:underline; }
+      .pond-meta .pond-en { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; letter-spacing:.1px; }
       .pond-hero h1 { font-size:17px; margin:0; }
-      .pond-say em { display:block; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); margin-top:3px; }
-      .pond-acts { display:flex; gap:8px; flex:none; }
+      .pond-say em { display:inline; margin-left:8px; white-space:nowrap; font-size:11px; font-style:normal; color:var(--dsw-alias-label-tertiary); }
+      /* 大主页快捷开关：只放最常改的三类，详细项仍留在「设置」 */
+      .pond-quick { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; padding:9px 12px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
+      .pond-quick-group { display:flex; align-items:center; gap:7px; min-width:0; }
+      .pond-quick-k { font-size:11.5px; color:var(--dsw-alias-label-tertiary); white-space:nowrap; }
+      .pond-quick-seg { display:inline-flex; border:1px solid var(--dsw-alias-border-l2); border-radius:7px; overflow:hidden; background:var(--dsw-alias-bg-layer-2); }
+      .pond-quick-seg button { flex:0 0 auto; height:28px; padding:0 10px; border:0; border-left:1px solid var(--dsw-alias-border-l1); background:transparent; color:var(--dsw-alias-label-secondary); font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+      .pond-quick-seg button:first-child { border-left:0; }
+      .pond-quick-seg button.on { background:var(--bd-accent); color:#fff; }
+      .pond-quick-seg button:hover:not([disabled]):not(.on) { background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); }
+      .pond-quick-seg button[disabled] { opacity:.5; cursor:wait; }
+      .pond-quick-switches { gap:13px; }
+      .pond-quick-sw { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--dsw-alias-label-secondary); white-space:nowrap; }
+      .pond-quick-acts { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-left:auto; }
+      .pond-quick-acts [data-bd-btn] { height:28px; padding:0 10px; font-size:12px; }
+      .pond-quick-more { height:28px; padding:0 9px; border:1px solid var(--dsw-alias-border-l2); border-radius:6px; background:transparent; color:var(--dsw-alias-label-secondary); font:inherit; font-size:12px; cursor:pointer; }
+      .pond-quick-more:hover { background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); }
+      .pond-quick-toast {
+        position:fixed; right:24px; bottom:24px; z-index:1000; max-width:min(360px, calc(100vw - 48px));
+        padding:9px 14px; border:1px solid var(--dsw-alias-border-l2); border-radius:9px;
+        background:var(--dsw-alias-bg-layer-1); box-shadow:0 10px 32px rgba(0,0,0,.20);
+        font-size:12px; line-height:1.5; color:var(--dsw-alias-label-secondary);
+        overflow-wrap:anywhere; pointer-events:none; animation:pond-toast-in .16s ease-out;
+      }
+      @keyframes pond-toast-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+      .pond-quick-toast.warn { color:var(--dsw-alias-state-warn-primary); border-color:rgba(210,153,34,.55); }
+      .pond-bind { flex:none; height:24px; padding:0 7px; border:1px solid var(--dsw-alias-border-l1); border-radius:999px; background:transparent; color:var(--dsw-alias-label-tertiary); font:inherit; font-size:10.5px; white-space:nowrap; cursor:pointer; }
+      .pond-bind.ok { color:var(--dsw-alias-state-success-primary); border-color:rgba(46,160,67,.45); }
+      .pond-bind.warn { color:var(--dsw-alias-state-warn-primary); border-color:rgba(210,153,34,.50); }
+      .pond-quick-stats { display:flex; flex-wrap:wrap; align-items:center; gap:3px 12px; min-width:0; font-size:11.5px; line-height:1.5; color:var(--dsw-alias-label-secondary); }
+      .pond-quick-stats b { color:var(--dsw-alias-label-primary); font-weight:600; }
       /* 发光：悬停/按下/聚焦时加一圈蓝光（底色已在上面的调色板里给足） */
       .pond [data-bd-btn] { transition:box-shadow .16s ease, background .12s ease, border-color .12s ease; }
       .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40) !important; }
       .pond [data-bd-btn]:active { box-shadow:0 0 0 3px rgba(37,99,235,.50), 0 0 22px rgba(37,99,235,.55) !important; }
       .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38) !important; }
       .pond [data-bd-btn][disabled] { box-shadow:none; cursor:not-allowed; }
-      /* 左下角入口：同样是原样 + 发光 */
-      .pond-entry { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 8px; border:0; border-radius:6px;
-        background:transparent; color:inherit; font-size:12px; cursor:pointer; transition:box-shadow .16s ease; }
-      .pond-entry:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40); }
-      .pond-entry:active { box-shadow:0 0 0 2px rgba(37,99,235,.38), 0 0 18px rgba(37,99,235,.45); }
-      .pond-strip { display:flex; gap:15px; align-items:center; font-size:12.5px; color:var(--dsw-alias-label-secondary); padding:9px 14px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
-      .pond-strip b { color:var(--dsw-alias-label-primary); font-weight:600; }
       .pond-tabs { display:flex; gap:8px; }
       .pond-tab { padding:5px 14px; border-radius:999px; font-size:12.5px; cursor:pointer; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-secondary); }
       .pond-tab.on { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); color:#fff; }
@@ -2024,6 +2071,7 @@ window.__ModuleLoader__.load({
       .pond-diary { white-space:pre-wrap; font-size:13px; line-height:1.85; color:var(--dsw-alias-label-secondary); }
       .pond-foot { padding:6px 2px 0; font-size:11px; color:var(--dsw-alias-label-tertiary); }
       @media (max-width:1080px) { .pond-cols { grid-template-columns:minmax(0,1fr); } .pond-top { grid-template-columns:minmax(0,1fr); } }
+      @media (max-width:760px) { .pond-quick-group, .pond-quick-acts, .pond-quick-stats { width:100%; } .pond-quick-acts { margin-left:0; } .pond-quick-acts [data-bd-btn], .pond-quick-more { flex:1 1 auto; } .pond-quick-seg { flex:1 1 auto; } .pond-quick-seg button { flex:1 0 auto; } }
     `
 
     const pondDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -2038,23 +2086,21 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function PondEntry() {
-      /* 侧栏底部那个入口（宿主原文：Optional actions beside Settings at the sidebar foot） */
-      return h('button', {
-        type: 'button', className: 'pond-entry', onClick: () => openPond(POND_ID), title: '打开B站鱼塘',
-      }, [
-        h('img', { key: 'i', src: POND_ICON, alt: '', width: 16, height: 16, style: { borderRadius: 4, display: 'block' } }),
-        h('span', { key: 't' }, 'B站鱼塘'),
-      ])
-    }
-
     function PondPage() {
       const [data, setData] = React.useState(null)
       const [tab, setTab] = React.useState('history')
       const [kw, setKw] = React.useState('全部')
       const [busy, setBusy] = React.useState(false)
+      const [running, setRunning] = React.useState(false)
+      const [finalizing, setFinalizing] = React.useState(false)
+      const [runElapsed, setRunElapsed] = React.useState(0)
       const [fold, setFold] = React.useState({})
       const [err, setErr] = React.useState('')
+      const [quickBusy, setQuickBusy] = React.useState('')
+      const [quickMsg, setQuickMsg] = React.useState(null)
+      const [quickCommentMode, setQuickCommentMode] = React.useState(null)
+      const runLock = React.useRef(false)
+      const quickLock = React.useRef(false)
 
       const load = React.useCallback(async () => {
         try {
@@ -2063,21 +2109,131 @@ window.__ModuleLoader__.load({
         } catch (e) { setErr(String(e && e.message ? e.message : e)) }
       }, [])
 
-      React.useEffect(() => { load() }, [load])
+      const syncRun = React.useCallback(async () => {
+        try {
+          const s = await jget('/status')
+          const state = {
+            running: Boolean(s && s.running),
+            finalizing: Boolean(s && s.finalizing),
+          }
+          setRunning(state.running)
+          setFinalizing(state.finalizing)
+          setRunElapsed(Number(s && s.runElapsedSec) || 0)
+          return state
+        } catch { return null }
+      }, [])
+
       React.useEffect(() => {
-        const id = setInterval(load, 30000)
+        load()
+        syncRun()
+        const id = setInterval(() => { load(); syncRun() }, 30000)
         return () => clearInterval(id)
-      }, [load])
+      }, [load, syncRun])
+
+      // 从设置页切回大主页时立刻重拉一次：设置页里可能刚绑定 UID、改了开关或启动了一轮。
+      // 只 syncRun 不够，首页的 data.config 会一直停在进入设置页前的旧快照。
+      React.useEffect(() => {
+        if (tab !== 'history') return
+        setQuickCommentMode(null)
+        load()
+        syncRun()
+      }, [tab, load, syncRun])
+
+      // 快捷保存提示只短暂出现，避免常驻文字把控制条撑得不稳定。
+      React.useEffect(() => {
+        if (!quickMsg) return
+        const t = setTimeout(() => setQuickMsg(null), quickMsg.tone === 'warn' ? 8000 : 2500)
+        return () => clearTimeout(t)
+      }, [quickMsg])
+
+      /* 运行中每 2 秒问一次；子进程退出后还有一个 finalizing（写历史 / 补封面）阶段，
+         必须等它也为 false 再拉 /pond，否则封面墙会读到旧文件，只能靠手动刷新。 */
+      React.useEffect(() => {
+        if (!running && !finalizing) return
+        let alive = true
+        const tick = async () => {
+          try {
+            const s = await jget('/status')
+            if (!alive) return
+            const on = Boolean(s && s.running)
+            const fin = Boolean(s && s.finalizing)
+            setRunElapsed(Number(s && s.runElapsedSec) || 0)
+            setRunning(on)
+            setFinalizing(fin)
+            if (!on && !fin) await load()
+          } catch { /* 下一次再问 */ }
+        }
+        tick()
+        const id = setInterval(tick, 2000)
+        return () => { alive = false; clearInterval(id) }
+      }, [running, finalizing, load])
 
       const run = async () => {
+        if (runLock.current || running || finalizing) return
+        runLock.current = true
         setBusy(true)
-        try { await jpost('/run', {}); await load() } catch (e) { setErr(String(e && e.message ? e.message : e)) } finally { setBusy(false) }
+        setErr('')
+        try {
+          const r = await jpost('/run', {})
+          if (r && (r.started || r.busy)) {
+            setRunning(Boolean(r.started))
+            setFinalizing(Boolean(r.busy && !r.started))
+            setRunElapsed(Number(r.elapsedSec) || 0)
+            const synced = await syncRun()
+            if (synced && !synced.running && !synced.finalizing) await load()
+          } else {
+            setErr(String((r && r.error) || '这一轮没有启动'))
+            await syncRun()
+          }
+          await load()
+        } catch (e) {
+          setErr(String(e && e.message ? e.message : e))
+          await syncRun()
+        } finally {
+          runLock.current = false
+          setBusy(false)
+        }
+      }
+
+      /* 首页快捷保存：先乐观更新，失败时回滚并重新拉一次真配置。 */
+      const quickSave = async (patch, what) => {
+        if (quickBusy || quickLock.current) return
+        quickLock.current = true
+        const previous = (data && data.config) || {}
+        setQuickBusy(what)
+        setQuickMsg({ text: what + '：保存中…', tone: '' })
+        setData((prev) => prev ? { ...prev, config: { ...(prev.config || {}), ...patch } } : prev)
+        try {
+          const r = await jpost('/config', patch)
+          if (!r || r.ok === false) throw new Error((r && r.error) || '接口没有返回成功')
+          // 意图 patch 放最后：宿主回包若还是旧快照，也不能把刚点下的模式视觉回滚。
+          setData((prev) => prev ? { ...prev, config: { ...(prev.config || {}), ...(r.config || {}), ...patch } } : prev)
+          if (r.host && r.host.ok === false && !r.host.noForm) {
+            setQuickMsg({ text: what + '：已保存到插件，但同步到 DSH 设置失败（' + r.host.error + '）', tone: 'warn' })
+          } else {
+            setQuickMsg({ text: what + '：已更新', tone: 'ok' })
+          }
+          return true
+        } catch (e) {
+          setData((prev) => prev ? { ...prev, config: previous } : prev)
+          setQuickMsg({ text: what + '没保存：' + String(e && e.message ? e.message : e), tone: 'warn' })
+          await load()
+          return false
+        } finally {
+          quickLock.current = false
+          setQuickBusy('')
+        }
       }
 
       const d = data || {}
       const st = d.stats || { xp: 0, level: 1, step: 200, xpIn: 0, days: 0, items: 0, picked: 0, replies: 0, keywords: [], week: [] }
       const items = d.items || []
       const daily = d.daily || { count: 0, cap: 0 }
+      const qcfg = d.config || {}
+      const savedCommentMode = qcfg.circleMode ? 'circle' : (qcfg.autoComment ? 'comment' : 'off')
+      const commentMode = quickCommentMode || savedCommentMode
+      const mentionReady = Boolean(qcfg.mentionName || Number(qcfg.mentionUid) > 0)
+      const dmReady = Number(qcfg.dmUid) > 0
     const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n || 0)
       const kws = [{ k: '全部', n: items.length }].concat(st.keywords || [])
       const kwOf = (e) => (e.keywords && e.keywords.length ? e.keywords : ['未标'])
@@ -2100,9 +2256,15 @@ window.__ModuleLoader__.load({
         ])
       })
 
-      const donutTotal = Math.max(1, (st.keywords || []).reduce((a, x) => a + x.n, 0))
+      /* 饼图最多显示 5 块：前 4 个关键词 + 其他。关键词一多就把扇区切得太碎，
+         既看不清，百分比也会给人一种“没占满”的错觉。完整关键词仍由下面那排筛选。 */
+      const keywordStats = st.keywords || []
+      const restKeywordCount = keywordStats.slice(4).reduce((a, x) => a + x.n, 0)
+      const donutParts = keywordStats.slice(0, 4).map((x) => ({ ...x }))
+      if (restKeywordCount > 0) donutParts.push({ k: '其他', n: restKeywordCount, rest: true })
+      const donutTotal = Math.max(1, donutParts.reduce((a, x) => a + x.n, 0))
       let acc = 0
-      const donutStops = (st.keywords || []).map((x, i) => {
+      const donutStops = donutParts.map((x, i) => {
         const from = acc / donutTotal * 360
         acc += x.n
         const to = acc / donutTotal * 360
@@ -2173,7 +2335,10 @@ window.__ModuleLoader__.load({
       }
 
       const diaryText = (d.diary && d.diary.text) || ''
-      const settingsTab = h('div', { className: 'pond-card pond-settings' }, h(Panel))
+      const settingsTab = h('div', { className: 'pond-card pond-settings' }, h(Panel, {
+        layout: 'embedded',
+        onConfigChanged: (p) => setData((prev) => prev ? { ...prev, config: { ...(prev.config || {}), ...p } } : prev),
+      }))
 
       const historyTab = h('div', { className: 'pond-cols' }, [
         h('div', { key: 'l', style: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 } }, [
@@ -2195,7 +2360,9 @@ window.__ModuleLoader__.load({
                     },
                   }, [h('span', { key: 'n' }, String(items.length)), h('span', { key: 'l', style: { fontSize: 9.5, fontWeight: 400, color: 'var(--dsw-alias-label-tertiary)' } }, '看过')])),
                 ]),
-                h('div', { key: 'lg', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, (st.keywords || []).slice(0, 5).map((x, i) => h('div', { key: 'k' + i, className: 'lg' }, [
+                h('div', { key: 'lg', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, donutParts.map((x, i) => h('div', {
+                  key: 'k' + i, className: 'lg', title: x.k + ' · ' + x.n + ' 条',
+                }, [
                   h('i', { key: 'i', style: { background: POND_COLORS[i % POND_COLORS.length] } }),
                   h('span', { key: 's' }, x.k + ' ' + Math.round((x.n / donutTotal) * 100) + '%'),
                 ]))),
@@ -2254,30 +2421,101 @@ window.__ModuleLoader__.load({
             (d.say && d.say.text) ? d.say.text : '今天还没说话。跑一轮，我就有得聊了。',
             h('em', { key: 'e' }, '—— 鱼说'),
           ]),
-          h('div', { key: 'a', className: 'pond-acts' }, [
-            h('div', { key: 'b', style: { display: 'flex', gap: 8 } }, [
-              h('button', { key: 'r', 'data-bd-btn': '', 'data-primary': '', type: 'button', disabled: busy, onClick: run }, busy ? '跑着呢…' : '跑一轮'),
-              h('button', { key: 'f', 'data-bd-btn': '', type: 'button', onClick: load }, '刷新'),
-            ]),
-            h('div', { key: 'meta', className: 'pond-meta' }, [
+          h('div', { key: 'a', className: 'pond-meta' }, [
               'B站鱼塘 · ',
+              h('span', { key: 'en', className: 'pond-en' }, 'dsh-bili-pond'),
+              ' · ',
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.11',
-            ]),
+              ' · v1.3.12',
           ]),
         ]),
-        h('div', { key: 'strip', className: 'pond-strip' }, [
-          h('span', { key: 'a' }, ['看过 ', h('b', null, String(st.items || 0)), ' 条']),
-          h('span', { key: 'b' }, ['回过 ', h('b', null, String(st.replies || 0)), ' 条']),
-          h('span', { key: 'c' }, ['今天回过 ', h('b', null, String(daily.count || 0) + '/' + String(daily.cap || 0))]),
-          h('span', { key: 'd' }, ['攒了 ', h('b', null, String(st.xp || 0)), ' 点经验']),
-          d.usage && d.usage.tokens
-            ? h('span', { key: 'f', title: '估算：按设置里的单价（美元/百万 token）× 今日用量' },
-                ['今日 ≈', h('b', null, '¥' + Number(d.usage.cny || 0).toFixed(2)), ' · ' + fmtTok(d.usage.tokens) + ' tokens'])
-            : null,
-          err ? h('span', { key: 'e', className: 'pond-bad' }, '接口出错：' + err) : null,
+        h('div', { key: 'quick', className: 'pond-quick', 'data-pond-quick': '' }, [
+          h('div', { key: 'mode', className: 'pond-quick-group' }, [
+            h('span', { key: 'k', className: 'pond-quick-k' }, '评论'),
+            h('div', { key: 'seg', className: 'pond-quick-seg' },
+              [['off', '关闭'], ['circle', '圈地自萌'], ['comment', '普通评论']].map(([id, label]) => h('button', {
+                key: id, type: 'button', className: commentMode === id ? 'on' : '',
+                'aria-pressed': commentMode === id ? 'true' : 'false',
+                'data-quick-mode': id,
+                disabled: Boolean(quickBusy) || !data,
+                title: id === 'circle' ? '只回 UP 主本人邀请的一级评论，绝不起新楼' : (id === 'comment' ? '在选中的视频下发布新楼' : '只生成报告，不发评论'),
+                onClick: () => {
+                  setQuickCommentMode(id)
+                  const p = id === 'circle'
+                    ? { autoComment: false, circleMode: true, replyToComments: false }
+                    : (id === 'comment'
+                      ? { autoComment: true, circleMode: false, replyToComments: false }
+                      : { autoComment: false, circleMode: false, replyToComments: false })
+                  quickSave(p, id === 'circle' ? '圈地自萌' : (id === 'comment' ? '普通评论' : '评论模式'))
+                    .then(() => setQuickCommentMode(null))
+                },
+              }, label))),
+            quickMsg ? h('div', {
+              key: 'quick-msg',
+              className: 'pond-quick-toast' + (quickMsg.tone === 'warn' ? ' warn' : ''),
+              title: quickMsg.text,
+              role: 'status',
+              'aria-live': 'polite',
+              'data-quick-msg': quickMsg.tone || 'ok',
+            }, quickMsg.text) : null,
+            h('button', {
+              key: 'mention-bind', type: 'button',
+              className: 'pond-bind ' + (mentionReady ? 'ok' : 'warn'),
+              title: mentionReady ? '评论 @ 的 UID 已绑定，点击去设置查看' : '评论 @ 的 UID 还没绑定，点击去设置',
+              onClick: () => setTab('settings'),
+            }, mentionReady ? '@ 已绑定' : '@ 未绑定'),
+          ]),
+          h('div', { key: 'sw', className: 'pond-quick-group pond-quick-switches' }, [
+            h('span', { key: 'dm', className: 'pond-quick-sw' }, [
+              h(Switch, {
+                key: 's', on: Boolean(qcfg.dmOn), disabled: Boolean(quickBusy) || !data,
+                onChange: (v) => {
+                  if (v && !dmReady) {
+                    setQuickMsg({ text: '私信还没绑定 UID，先去设置里识别收件人', tone: 'warn' })
+                    return
+                  }
+                  quickSave({ dmOn: v }, '私信')
+                },
+              }),
+              h('span', { key: 't' }, '私信'),
+            ]),
+            h('button', {
+              key: 'dm-bind', type: 'button',
+              className: 'pond-bind ' + (dmReady ? 'ok' : 'warn'),
+              title: dmReady ? '私信 UID 已绑定，点击去设置查看' : '私信 UID 还没绑定，点击去设置',
+              onClick: () => setTab('settings'),
+            }, dmReady ? 'UID 已绑定' : 'UID 未绑定'),
+            h('span', { key: 'run', className: 'pond-quick-sw' }, [h(Switch, { key: 's', on: Boolean(qcfg.autoRun), disabled: Boolean(quickBusy) || !data, onChange: (v) => quickSave({ autoRun: v }, '自动运行') }), h('span', { key: 't' }, '自动运行')]),
+            h('span', { key: 'guard', className: 'pond-quick-sw' }, [h(Switch, { key: 's', on: Boolean(qcfg.guardOn), disabled: Boolean(quickBusy) || !data, onChange: (v) => quickSave({ guardOn: v }, '评论区守护') }), h('span', { key: 't' }, '评论区守护')]),
+            h('span', { key: 'asr', className: 'pond-quick-sw' }, [h(Switch, { key: 's', on: Boolean(qcfg.transcribe), disabled: Boolean(quickBusy) || !data, onChange: (v) => quickSave({ transcribe: v }, '自动转写') }), h('span', { key: 't' }, '自动转写')]),
+          ]),
+          h('div', { key: 'stats', className: 'pond-quick-stats', 'data-pond-stats': '' }, [
+            h('span', { key: 'items' }, ['看过 ', h('b', null, String(st.items || 0)), ' 条']),
+            h('span', { key: 'replies' }, ['回过 ', h('b', null, String(st.replies || 0)), ' 条']),
+            h('span', { key: 'today' }, ['今天回过 ', h('b', null, String(daily.count || 0) + '/' + String(daily.cap || 0))]),
+            d.usage
+              ? h('span', {
+                  key: 'tokens',
+                  title: '输入 ' + fmtTok(d.usage.in || 0) + ' · 缓存 ' + fmtTok(d.usage.cache || 0)
+                    + ' · 输出 ' + fmtTok(d.usage.out || 0),
+                }, ['今日 token ', h('b', null, fmtTok(d.usage.tokens || 0))])
+              : null,
+            h('span', { key: 'xp' }, ['攒了 ', h('b', null, String(st.xp || 0)), ' 点经验']),
+            err ? h('span', { key: 'err', className: 'pond-bad' }, '接口出错：' + err) : null,
+          ]),
+          h('div', { key: 'acts', className: 'pond-quick-acts' }, [
+            h('button', {
+              key: 'run', 'data-bd-btn': '', 'data-primary': '', type: 'button',
+              disabled: busy || running || finalizing,
+              'aria-busy': (busy || running || finalizing) ? 'true' : 'false',
+              title: running ? '这一轮结束前不会重复启动' : (finalizing ? '正在写历史 / 补封面' : (busy ? '正在启动这一轮' : '手动跑一轮')),
+              onClick: run,
+            }, busy ? '启动中…' : (running ? ('跑着呢' + (runElapsed > 0 ? ' · ' + pondMmss(runElapsed) : '')) : (finalizing ? '收尾中…' : '跑一轮'))),
+            h('button', { key: 'refresh', 'data-bd-btn': '', type: 'button', onClick: load }, '刷新'),
+            h('button', { key: 'more', type: 'button', className: 'pond-quick-more', onClick: () => setTab('settings') }, '更多设置'),
+          ]),
         ]),
         tabBar,
         tab === 'history' ? historyTab : tab === 'memory' ? memoryTab : tab === 'diary' ? diaryTab : settingsTab,
@@ -2304,10 +2542,10 @@ window.__ModuleLoader__.load({
         if (!slots) return
         slots.inject('settings.section', () => slots.register(
           { name: 'settings.section', id: 'bili-pond', order: 30, label: 'B站鱼塘' },
-          () => h(Panel),
+          () => h(Panel, { layout: 'settings' }),
         ))
 
-        /* ⭐ 2026-10-23 整页入口：侧栏图标（id 与 main key 相同）+ 侧栏底部按钮 */
+        /* ⭐ 2026-10-23 整页入口：只保留左上侧栏图标（id 与 main key 相同） */
         openPond = (id) => {
           try {
             const layout = ctx.get('layout')
@@ -2321,10 +2559,6 @@ window.__ModuleLoader__.load({
         slots.inject('main', () => slots.register(
           { name: 'main', key: POND_ID },
           () => h(PondPage),
-        ))
-        slots.inject('sidebar.footer.action', () => slots.register(
-          { name: 'sidebar.footer.action', id: POND_ID + '-entry', order: 20, label: 'B站鱼塘' },
-          () => h(PondEntry),
         ))
       },
     }

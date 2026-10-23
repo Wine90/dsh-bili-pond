@@ -118,7 +118,7 @@ for (const t of ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_in
 ok(idx.includes('BILI_MCP_TOOLS:'), 'overlay 里没把白名单传给 mcp_client')
 
 // ⑫ 配额只数「挑中的」（章程里那行 `### BV号`）
-ok(idx.includes('const PICK_RE ='), 'index.js 里没有 PICK_RE（配额靠它数标题行）')
+ok(idx.includes('harvestReport(file).filter((e) => e.picked).length'), '配额计数没有复用 history 解析器')
 ok(!idx.includes('new Set(text.match(BV_RE)'), 'countPicks 还在数报告里出现的所有 BV（会把「提到过」算成「挑中」）')
 ok(duty.includes('### BV号'), 'duty.md 没写「每条挑中的第一行是 ### BV号」')
 ok(idx.includes('### BV号'), '提示词里没把配额数的格式告诉它')
@@ -180,7 +180,11 @@ ok(duty.includes('归档是给"以后回头翻"用的') || duty.includes('报告
 ok(/const pick = \(buf\) => \{[\s\S]{0,400}try \{ appendFileSync/.test(idx), '接子进程输出的 pick 没包 try/catch（EBUSY 会杀掉整个宿主）')
 ok(idx.includes('ELECTRON_RUN_AS_NODE'), '桌面版 spawn 没带 ELECTRON_RUN_AS_NODE=1')
 ok(idx.includes('process.resourcesPath'), '桌面版找不到 dsh 时没有去应用目录里找')
-ok(idx.includes('找不到 dsh'), '找不到 dsh 时没有出声（静默失败）')
+ok(idx.includes("['app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js']"), '桌面版没直达 dsh-desktop-host CLI（会退回 cmd.exe 截断多行提示词）')
+ok(/args: \['--expose-internals'\]/.test(idx) && /args: \[\.\.\.c\.args, p\], shell: false/.test(idx), '桌面版 dsh CLI 没以 --expose-internals + shell:false 启动')
+ok(idx.includes('无法安全传递多行提示词'), '没有阻止 shell:true 吞掉多行提示词')
+ok(!idx.includes("return { command: 'dsh', args: [], shell: true }"), '还在静默退回 shell:true（多行提示词会被 cmd.exe 截断）')
+ok(idx.includes('找不到 dsh CLI'), '找不到 dsh 时没有说清错误')
 
 // ⑯ 私信是独立开关（摘 PR #9）：默认必须关、收信人要 UID、正文有 500 字上限
 ok(/dmOn: z\.boolean\(\)\.default\(false\)/.test(idx), 'dmOn 默认不是 false（会改变老用户的行为）')
@@ -211,7 +215,7 @@ ok(idx.includes('if (host.ok || host.noForm) markSyncFailed'), 'persistCfg 没�
 ok(cli.includes('!r.host.noForm'), '前端还是把 noForm 报成「同步失败」')
 
 // ⑳ 界面上的「本轮会做」必须跟宿主端判据一致：评论、私信是两个独立开关
-ok(cli.includes('const commentActive = Boolean(sw(\'autoComment\') && cfg.mentionName)'), '前端算「本轮会做」时评论判据与 index.js 不一致')
+ok(cli.includes('const commentActive = Boolean(!circleActive && sw(\'autoComment\') && cfg.mentionName)'), '前端算「本轮会做」时评论判据与 index.js 不一致')
 ok(cli.includes('const dmActive = Boolean(dmOn && Number(dmUid) > 0)'), '前端算「本轮会做」时私信判据与 index.js 不一致')
 ok(!cli.includes("cfg.dmMode !== 'only'"), '前端还在用旧的 dmMode 三档判断')
 ok(cli.includes('只发私信') && cli.includes('评论 + 私信') && cli.includes('只发公开评论'), '「本轮会做」的四种结果文案不全')

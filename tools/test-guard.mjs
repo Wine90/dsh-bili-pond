@@ -149,7 +149,7 @@ ok(/if \(why === 'guard'\) \{\s*\n\s*return \['bili_guard_scan'/.test(src),
   '守护轮的工具白名单应收窄成只读内容 + 回复那几只')
 ok(/BILI_MCP_TOOLS: '\$\{mcpWhitelist\(why\)\.join\(','\)\}'/.test(src),
   'overlay 的白名单必须按这一轮的来源（why）算，否则守护轮还是握着搜索/私信的手')
-ok(/const overlay = ensureOverlay\(why\)/.test(src) && /args\.push\(promptFor\(why\)\)/.test(src),
+ok(/const overlay = ensureOverlay\(why\)/.test(src) && /(?:args\.push\(promptFor\(why\)\)|const dutyPrompt = promptFor\(why\)[\s\S]{0,220}args\.push\(dutyPrompt\))/.test(src),
   'runDuty 应把 why 一路传进 overlay 与提示词')
 
 if (fails) {

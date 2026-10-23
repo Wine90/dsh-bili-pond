@@ -85,6 +85,8 @@ export const Config = !z ? undefined : z.object({
   subtitleProbeMax: z.natural().default(3).extra('volatile', true),
   /** 自动评论 @ 使用者（默认关 —— 会拿用户的号说话，必须他自己开） */
   autoComment: z.boolean().default(false).extra('volatile', true),
+  /** 圈地自萌：只回视频 UP 主主动邀请的楼中楼，绝不起新楼（默认关） */
+  circleMode: z.boolean().default(false).extra('volatile', true),
   /** ⭐ 私信开关（独立于评论：两个都开就是「评论 + 私信」） */
   dmOn: z.boolean().default(false).extra('volatile', true),
   /**
@@ -330,7 +332,7 @@ const pondAccount = async () => {
     autoRun: false, autoRunsPerDay: 6, autoGapMinutes: 60, peakValleyOnly: false,
     perRoundMax: 3, perDayMax: 18, transcribePerDay: 10,
     minDurationMin: 0, maxDurationMin: 60, preferSubtitle: true, subtitleProbeMax: 3,
-    noon: true, night: true, autoComment: false, transcribe: false, asrModel: 'small',
+    noon: true, night: true, autoComment: false, circleMode: false, transcribe: false, asrModel: 'small',
     dmOn: false, dmMode: 'off', dmUid: 0,
     keywords: [], commentPerRound: 1, mentionName: '', mentionUid: 0, pythonPath: 'python', dshBin: '', headlessProfile: 'headless', dutyProvider: '', dutyModel: '', overlayMcp: true, reuseRoutes: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
     guardOn: false, guardWhitelist: '', guardOwnAll: true, guardDailyCap: 30, guardScope: 1, guardPerRound: 3, guardPollMinutes: 3, guardEmoji: true, guardTone: '',
@@ -421,6 +423,15 @@ const pondAccount = async () => {
     if ('preferSubtitle' in p) p.preferSubtitle = Boolean(p.preferSubtitle)
     if ('autoRun' in p) p.autoRun = Boolean(p.autoRun)
     if ('peakValleyOnly' in p) p.peakValleyOnly = Boolean(p.peakValleyOnly)
+    if ('circleMode' in p) p.circleMode = Boolean(p.circleMode)
+    // 圈地自萌与普通评论互斥：打开后只允许专用楼中楼工具，普通评论/回复全部关掉。
+    // 用“保存后的最终状态”判断，避免直接 POST autoComment=true 时绕过互斥。
+    const circleNow = ('circleMode' in p) ? Boolean(p.circleMode) : Boolean(savedCfg().circleMode)
+    if (circleNow) {
+      p.circleMode = true
+      p.autoComment = false
+      p.replyToComments = false
+    }
     return p
   }
 
@@ -749,6 +760,9 @@ const pondAccount = async () => {
     },
     async execute(args) {
       // 评论开关关着 / 没填「要 @ 谁」⇒ 工具层也挡掉（除非当场 force）
+      if (cfg.circleMode) {
+        return { ok: false, error: '圈地自萌开启：禁止新楼和普通评论，请走 bili_circle_reply' }
+      }
       const commentOn = Boolean(cfg.autoComment && cfg.mentionName)
       if (!commentOn && !args.force) {
         return {
@@ -914,26 +928,13 @@ const pondAccount = async () => {
     return st
   }
 
-  /* ⭐ 「定量刷」承诺的是**每天挑几条**（2026-10-16 审查修 H1：原来 st.count 从没自增过，
-   *   tick 那道 `count >= perDay` 的闸形同虚设 ⇒ noon + night 两个窗口各跑满一轮，
-   *   后一轮还会把前一轮的报告覆盖掉）。
-   *   数哪儿？数**今天的报告**里那些 `### BV号` 标题行（章程写死了这个格式）。
-   *   ⚠️ 为什么不数「报告里出现的所有 BV」（2026-10-17 复查修的）：报告里还会出现**没挑中**的 BV ——
-   *     「因无字幕跳过 N 条」那行、评论区里别人问起的视频、"判重表读不到"的说明 —— 全算进去的话，
-   *     perDay 默认 5 ⇒ 一轮里出现 5 个 BV 就把当天额度吃光 ⇒ **傍晚那轮直接不跑** ✗。
-   *   ⚠️ 围栏 ``` 里的内容一律不看：那一轮没写报告时 stubReportIfMissing 会把 duty.log 尾部贴进报告，
-   *     那里面的 BV 是"看过的"，不是"挑出来的"。
-   *   ⚠️ 数不出来（章程那条格式没照做）就当 0 条 —— 宁可少算（顶多多跑一轮、额度也写在提示词里），
-   *     也别把"提到过"算成"挑中"（那会让使用者当天再也拿不到内容）✓。 */
-  const PICK_RE = /^#{2,3}[ \t]*(BV[0-9A-Za-z]{10})/gm
+  /* ⭐ 「定量刷」承诺的是**每天挑几条**。
+   *   报告格式会演进（模型有时写 `### BV号`，有时写 `### 1. 标题 — UP — 播放量`
+   *   再把 BV 放到下一行），所以计数不能再赌某一种标题格式；统一复用历史解析器，
+   *   只数 `picked === true` 的条目，既不漏新格式，也不会把「看过但跳过」算进额度。 */
   const reportFileOf = (now = new Date()) => join(outDir, `${dayKey(now)}.md`)
   const countPicks = (file) => {
-    try {
-      const text = readFileSync(file, 'utf8').replace(/```[\s\S]*?```/g, '')
-      const ids = new Set()
-      for (const m of text.matchAll(PICK_RE)) ids.add(m[1])
-      return ids.size
-    } catch { return 0 }
+    try { return harvestReport(file).filter((e) => e.picked).length } catch { return 0 }
   }
   // 报告是事实来源；state 兜住"报告被删 / 手改"那一下（取两者里大的）
   const countPickedToday = (now = new Date()) => {
@@ -993,19 +994,29 @@ const pondAccount = async () => {
     //    ⇒ 老逻辑退到 `dsh`（PATH 里没有这个命令）⇒ 那一轮必败、而且只留下一句 exit 1 ✗
     //    桌面版把 dsh 打在应用里 ⇒ 按 `process.resourcesPath` 猜几个位置（找到就用；找不到就**明说**）
     if (process.resourcesPath) {
-      for (const rel of [
-        ['app.asar.unpacked', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'],
-        ['app', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'],
-        ['node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'],
-      ]) {
-        const p = join(process.resourcesPath, ...rel)
-        if (existsSync(p)) return { command: process.execPath, args: [p], shell: false }
+      /* ⭐ 桌面版的 dsh.cmd 实际调用 dsh-desktop-host/lib/cli.js。
+       *   以前只找 @deepseek-ai/dsh/lib/bin.js，找不到就退回 cmd.exe；多行提示词在那里
+       *   会被按行拆开，模型只收到第一行（配额 / 圈地 / 私信等本轮指令全丢）。
+       *   直接调用 cli.js 并保持 shell:false，才能把整段提示词原样作为单个 argv 传入。 */
+      const desktop = [
+        { rel: ['app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js'], args: ['--expose-internals'] },
+        { rel: ['app.asar.unpacked', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'], args: [] },
+        { rel: ['app', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'], args: [] },
+        { rel: ['node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'], args: [] },
+      ]
+      for (const c of desktop) {
+        const p = join(process.resourcesPath, ...c.rel)
+        if (existsSync(p)) return { command: process.execPath, args: [...c.args, p], shell: false }
       }
     }
     for (const g of guesses) if (existsSync(g)) return { command: process.execPath, args: [g], shell: false }
     // ⚠️ 走到这儿就是真找不到 —— 一定要出声（静默失败比报错更坏）
-    log('⚠️ 找不到 dsh：桌面版多半不是 npm 全局安装的 ⇒ 请在设置里把「dsh 路径」指到 <应用目录>/…/@deepseek-ai/dsh/lib/bin.js，或改用 npm 装的 dsh')
-    return { command: 'dsh', args: [], shell: true }
+    const why = '找不到 dsh CLI：桌面版多半不是 npm 全局安装的 ⇒ 请在设置里把「dsh 路径」指到 <应用目录>/…/@deepseek-ai/dsh/lib/bin.js，或改用 npm 装的 dsh'
+    log(`⚠️ ${why}`)
+    /* ⭐ 不能再退回 shell:true。Windows 的 cmd.exe 会把多行 prompt 按行拆开，
+     *   只把第一行交给 dsh；那会让模型失去配额、圈地、私信和本轮所有动态指令，
+     *   看起来像“模型忘了”，实际是提示词根本没送到。 */
+    throw new Error(why)
   }
 
   /**
@@ -1108,7 +1119,8 @@ const pondAccount = async () => {
     //    评论 = autoComment（还要填了 mentionName 才有 @ 对象）
     //    私信 = dmOn（还要填了 dmUid）
     //    两个都开 = 评论 + 私信；工具层的闸用的是同一套判据。
-    const commentOn = Boolean(cfg.autoComment && cfg.mentionName)
+    const circleOn = Boolean(cfg.circleMode)
+    const commentOn = Boolean(!circleOn && cfg.autoComment && cfg.mentionName)
     const dmOn = Boolean(cfg.dmOn && Number(cfg.dmUid) > 0)
     /* ⭐ 第一行会变成会话列表里的标题（2026-10-22 用户：「值班轮也进对话，不是新建」） */
     return `值班：刷一轮 B站，挑值得我看的。\n\n`
@@ -1177,9 +1189,15 @@ const pondAccount = async () => {
       + `（用 \`bili_archive_append\`）`
       + ` —— 一行一条：日期 · BV 号 · 标题 · UP · 一句话结论 · 链接（跳过的那条在后面注明理由）；`
       + `这是**给以后检索用**的（报告是给人看的，归档是给"回头翻"用的），别省略、也别只写挑中的。`
-      + `自动评论并 @ ${cfg.mentionName || '（还没填要 @ 谁）'}${cfg.mentionUid ? '（UID ' + Number(cfg.mentionUid) + '）' : ''} 是${commentOn
-        ? `开着的（每轮最多 ${cfg.commentPerRound} 条评论，每条在正文里纯文本 @ ${cfg.mentionName}，150 字内）`
-        : '关着的（只写报告，别发评论）'}。`
+      + (circleOn
+        ? `⭐⭐ **圈地自萌开着**：这一轮**绝不允许发新楼**。`
+          + `只对视频评论区里 **UP 主本人发的一级评论**做邀请识别（普通用户说的不算）。`
+          + `必须先用 \`bili_circle_scan(bvid)\` 找邀请，再用 \`bili_circle_reply(bvid, rpid, text)\` 回楼中楼；`
+          + `每轮最多 ${Number(cfg.commentPerRound) || 0} 条，找不到 UP 邀请就一个字都不要发。`
+          + `带“别来 / 不要来 / 别刷 / 滚”的评论一律不算邀请；不需要 @ 使用者。`
+        : `自动评论并 @ ${cfg.mentionName || '（还没填要 @ 谁）'}${cfg.mentionUid ? '（UID ' + Number(cfg.mentionUid) + '）' : ''} 是${commentOn
+          ? `开着的（每轮最多 ${cfg.commentPerRound} 条评论，每条在正文里纯文本 @ ${cfg.mentionName}，150 字内）`
+          : '关着的（只写报告，别发评论）'}。`)
       + (dmOn
         ? `⭐⭐ **私信**：用 bili_send_message 把这一轮的结果发到 UID **${Number(cfg.dmUid)}**。`
           + `内容**别照抄评论那套**：把本轮每条值得的写成 **标题 + 链接 + 一句话理由**`
@@ -1198,7 +1216,7 @@ const pondAccount = async () => {
           + `⚠️ 私信里**不要**写"本鱼 / 本鲸 / 主人 / 人家"那套；⚠️ 发完把"已私信"记进报告（**报告里**可以写口径）。`
           + (commentOn ? `⚠️ 评论和私信都开着：公开评论照发（走下面那一整套规矩），私信**另外**再发一条。` : '')
         : '')
-      + (cfg.replyToComments
+      + (!circleOn && cfg.replyToComments
         ? `回复评论：开着（每轮最多回 ${Number(cfg.replyPerRound) || 1} 条）—— 只回「直接回复到你那条评论下面的人」，回完记进报告；找不到你那条评论就跳过，别硬找。`
         : `回复评论：关着（一个字都不要回任何人 —— 有人回复你那条评论也不要理）。`)
       /* ── 守护评论区：这一轮的待回复清单（宿主扫好、内联进来） ── */
@@ -1222,6 +1240,7 @@ const pondAccount = async () => {
    *    要读全就手工改这个列表（或者直接跑 mcp_server.py，不设这个变量 = 全放）。
    */
   const mcpWhitelist = (why = 'window') => {
+    const circleOnForWhitelist = () => Boolean(cfg.circleMode)
     /* ⭐ 守护轮**只给守护要用的那几只**（2026-10-22 用户抓到「我没手动也没开自动，怎么搜了一遍视频」）：
      *    那一轮本来只需要「看内容 → 回一条」，可整份章程喂进去之后模型顺手把日常流程也跑了
      *    （搜视频、写推荐、发私信）⇒ 从工具这一层就把路掐掉：连 bili_search / bili_send_message
@@ -1235,8 +1254,10 @@ const pondAccount = async () => {
      *    ⇒ 这三件事改由 MCP 子进程代劳（子进程是宿主起的，不受那一轮的沙箱限制），
      *      工具名刻意收窄：报告 / 判重表 / 归档各自一个，**不给通用文件工具** ✓ */
     const list = ['bili_search', 'bili_subtitle', 'bili_comments', 'bili_video_info', 'bili_user_info',
-      'bili_report_save', 'bili_seen_read', 'bili_seen_append', 'bili_archive_append']
-    if (cfg.autoComment || cfg.replyToComments) list.push('bili_reply')   // 只有真要发评论才给这只
+      'bili_report_save', 'bili_seen_read', 'bili_seen_append', 'bili_archive_append',
+      'bili_memory_append', 'bili_diary_write', 'bili_say']
+    if (circleOnForWhitelist()) list.push('bili_circle_scan', 'bili_circle_reply')
+    else if (cfg.autoComment || cfg.replyToComments) list.push('bili_reply')   // 只有真要发评论才给这只
     // ⭐ 私信：开关打开才给这只
     if (cfg.dmOn) list.push('bili_send_message')
     /* ⭐ 守护评论区（2026-10-22）：这一轮要「读内容 → 回一条」，所以三只都得给：
@@ -1244,7 +1265,17 @@ const pondAccount = async () => {
      *    bili_subtitle / bili_video_info（先看视频再说话，不许凭空编）
      *    bili_reply（精确回到那条评论上）
      *    取大号投稿用 bili_user_videos。 */
-    if (cfg.guardOn) list.push('bili_guard_scan', 'bili_user_videos', 'bili_reply')
+    if (cfg.guardOn) {
+      list.push('bili_guard_scan', 'bili_user_videos')
+      /* 圈地模式下只有真的有待回复守护项时才放开这只工具；否则连名字都不给。
+         就算放开，MCP 侧仍会拦 rpid=0 的新楼。 */
+      let pending = false
+      try {
+        const q = readJson(guardQueueFile, {})
+        pending = Array.isArray(q?.items) && q.items.length > 0
+      } catch { pending = false }
+      if (!circleOnForWhitelist() || pending) list.push('bili_reply')
+    }
     return list
   }
 
@@ -1441,6 +1472,15 @@ const pondAccount = async () => {
     for (const id of ['credentials', 'authorization', 'deepseek-account']) {
       yml.push('- id: ' + id, '  disabled: false', '')
     }
+    /* ⭐ 2026-10-23：鱼塘的 headless 会话单独存，不写 DSH 主会话目录。
+       否则每跑一轮守护 / 刷 B站，右侧「对话任务」就会多一条，越积越多。
+       只改会话落盘位置，不改功能；以后仍可手动跑，只是不混进主界面。 */
+    yml.push(
+      '- id: session-persistence-jsonl',
+      '  config:',
+      `    root: '${posix(join(stateDir, 'headless-sessions'))}'`,
+      '',
+    )
     // ⭐ 模型线路（设置页选的）。空 = 不覆盖，跟随 headless 自己的默认模型。
     const modelYml = modelOverrideYml()
     if (modelYml.length) yml.push(...modelYml, '')
@@ -1460,6 +1500,7 @@ const pondAccount = async () => {
         `          - '${posix(script)}'`,
         '        env:',
         `          BILI_MCP_TOOLS: '${mcpWhitelist(why).join(',')}'`,
+        `          BILI_CIRCLE_MODE: '${cfg.circleMode ? '1' : '0'}'`,
         `          BILI_GUARD_LOG: '${posix(guardLogFile)}'`,
         /* ⭐ 值班轮的「文件出口」要落在这个目录里（MCP 子进程不受那一轮沙箱限制） */
         `          BILI_DUTY_HOME: '${posix(stateDir)}'`,
@@ -1533,13 +1574,13 @@ const pondAccount = async () => {
    */
   const recordRoundHistory = () => {
     const f = join(outDir, `${dayKey()}.md`)
-    if (!existsSync(f)) return
+    if (!existsSync(f)) return Promise.resolve(0)
     // 先补封面再落盘（异步、限量、失败只留空）—— 免得 history.jsonl 里先存一条没图的、之后不再补
-    Promise.resolve()
+    return Promise.resolve()
       .then(async () => {
         const items = harvestReport(f)
         if (!items.length) return
-        try { await enrich(stateDir, items, { limit: 6 }) } catch (e) { log(`补封面时出错（不影响这一轮）：${e?.message ?? e}`) }
+        try { await enrich(stateDir, items, { limit: 6, timeoutMs: 4000, gapMs: 250 }) } catch (e) { log(`补封面时出错（不影响这一轮）：${e?.message ?? e}`) }
         const added = appendHistory(stateDir, items)
         if (added) log(`历史记录：记下 ${added} 条（${dayKey()}）`)
       })
@@ -1549,6 +1590,7 @@ const pondAccount = async () => {
   /* ⭐ 本轮运行状态（2026-10-20）：设置页要能实时看到"跑到哪了"
    *   只记开始时间 + 触发原因；日志尾部从 duty.log 现读，不用把输出全攒在内存里。 */
   let dutyRun = null            // { startedAt: ms, why: 'manual' | 'auto' | … }
+  let dutyFinalizing = false     // 子进程已退出，正在写历史 / 补封面；此时仍不许再开一轮
 
   /* ⭐ 把人看不懂的失败翻成一句人话（2026-10-20）
    *    以前一轮失败，界面只说"未启动，详见 duty.log" —— 使用者得自己去翻日志才知道是没登录、
@@ -1587,13 +1629,16 @@ const pondAccount = async () => {
     /* ⭐ 同一时间只允许一轮（2026-10-20）：按钮灰掉只是防手滑，
      *    真正的闸必须在这里 —— 网页、bili_run 工具、定时器三条路都走这个函数。
      *    上一轮没结束时再开一轮 = 两个 headless 进程同时烧模型额度、同时写同一份报告。 */
-    if (dutyRun) {
-      const el = Math.round((Date.now() - dutyRun.startedAt) / 1000)
-      log(`这一轮没跑：上一轮还在跑（已 ${el} 秒，来源 ${dutyRun.why}）`)
+    if (dutyRun || dutyFinalizing) {
+      const el = dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0
+      const reason = dutyRun
+        ? `上一轮还在跑（已 ${el} 秒，来源 ${dutyRun.why}）`
+        : '上一轮正在收尾（写历史 / 补封面）'
+      log(`这一轮没跑：${reason}`)
       return {
         started: false, busy: true, why,
-        elapsedSec: el, runningWhy: dutyRun.why,
-        error: `上一轮还在跑（已 ${el} 秒），等它结束再开`,
+        elapsedSec: el, runningWhy: dutyRun ? dutyRun.why : 'finalizing',
+        error: `${reason}，等它结束再开`,
       }
     }
     refreshCfg()          // ⭐ 设置页刚改过的值要立刻生效（config 是就地改的，快照会过期）
@@ -1607,7 +1652,11 @@ const pondAccount = async () => {
      *      对插件来说太重了：宿主看不到外部进程的会话，还得处理分桶/锁冲突）。每轮各起各的。 */
 
     args.push('--json')
-    args.push(promptFor(why))    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
+    const dutyPrompt = promptFor(why)
+    if (dsh.shell && /[\r\n]/.test(dutyPrompt)) {
+      throw new Error('dsh 启动方式仍在经过 shell，无法安全传递多行提示词')
+    }
+    args.push(dutyPrompt)    // ⭐ 这一轮的工作目录 = 使用者（或别的用户）的**工作区** —— 只有这样它的 `AGENTS.md` 才会自动加载。
     // ⭐ 工作目录 = **插件家**：那一轮**被沙箱关着**，只写得了自己工作目录里的东西 ✗
     //    （2026-10-14 教训：为了让它读工作区里的 AGENTS.md 把 cwd 改成工作区 ⇒
     //      它写不了家目录里的 out/ 报告、整轮卡在"我是被沙箱关着的"上面打转 ✗；
@@ -1667,7 +1716,12 @@ const pondAccount = async () => {
       dutyRun = null
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
       recordUsage(roundUsage)     // ⭐ 这一轮用了多少 token 记一笔
-      recordRoundHistory()        // ⭐ 把这一轮的日报解析进 history.jsonl（界面的「历史记录」靠它）
+      dutyFinalizing = true
+      // ⭐ 历史要先补封面再落盘。running 不能提前变 false，否则前端会在 history.jsonl
+      //    还没写完时刷新，用户看到的仍然是旧封面墙 —— 这正是「必须再手动刷新」的根因。
+      Promise.resolve(recordRoundHistory())
+        .catch((e) => log(`收尾写历史失败（不影响下一轮）：${e?.message ?? e}`))
+        .finally(() => { dutyFinalizing = false })
       /* ⭐ 守护：这一轮的待回复清单用完就删 —— 留着的话下一轮会把同一批再塞进提示词，
        *    模型就会重复回同一批人（seen 表只挡"再扫出来"，挡不住"清单还在"） */
       try { rmSync(guardQueueFile, { force: true }) } catch { /* 删不掉也不影响这一轮 */ }
@@ -2371,10 +2425,9 @@ const pondAccount = async () => {
    *    ⚠️ llm 是**可选**依赖：拿不到（老版本 / 没挂 llm）就回空列表，设置页照样能用，
    *       只是没有下拉 —— 绝不能让整条插件因为这个不激活。
    */
-  /* ⭐ 用量账本：每轮跑完把 token 记一行（usage-log.jsonl），页面显示"今日 ≈¥x · N tokens"。
+  /* ⭐ 用量账本：每轮跑完把 token 记一行（usage-log.jsonl），页面只显示今日 tokens，不再展示估算金额。
    *    数据来源：headless 的 --json 流里 status/step_end 事件带的 usage（inputTokens/outputTokens/cacheReadTokens）。
-   *    ⚠️ 费用是**估算**：单价取设置里的 priceIn/priceCache/priceOut（美元/百万 token），默认按 glm-5.3-flash 量级。
-   *       不追求准，只求"心里有个数"。 */
+   *    ⚠️ 只记 token 用量；金额不在界面展示，避免把估算价当成真实账单。 */
   const usageLogFile = join(stateDir, 'usage-log.jsonl')
   const recordUsage = (u) => {
     if (!u) return
@@ -2396,9 +2449,7 @@ const pondAccount = async () => {
         i += Number(r.in) || 0; c += Number(r.cache) || 0; o += Number(r.out) || 0; rounds += 1
       }
     } catch { /* 还没记过账 */ }
-    const pIn = Number(cfg.priceIn ?? 0.15), pCache = Number(cfg.priceCache ?? 0.03), pOut = Number(cfg.priceOut ?? 0.6)
-    const usd = (i / 1e6) * pIn + (c / 1e6) * pCache + (o / 1e6) * pOut
-    return { day, rounds, tokens: i + c + o, in: i, cache: c, out: o, usd, cny: usd * 7.2 }
+    return { day, rounds, tokens: i + c + o, in: i, cache: c, out: o }
   }
 
   const modelsHere = async () => {
@@ -2914,9 +2965,10 @@ const pondAccount = async () => {
       lastWhy: st.lastWhy || null,
       // ⭐ 实时进度（2026-10-20）：这一轮在不在跑、跑了多久 —— 设置页据此决定要不要轮询日志
       running: Boolean(dutyRun),
+      finalizing: Boolean(dutyFinalizing),
       runStartedAt: dutyRun ? new Date(dutyRun.startedAt).toISOString() : null,
       runElapsedSec: dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0,
-      runWhy: dutyRun ? dutyRun.why : null,
+      runWhy: dutyRun ? dutyRun.why : (dutyFinalizing ? 'finalizing' : null),
       /* ⭐ 上一轮为什么没成功（分类 + 一句人话），成功跑完会自动清掉 */
       lastError: (() => {
         const e = readJson(dutyStateFile, {}).lastError
@@ -2970,6 +3022,7 @@ const pondAccount = async () => {
       return sendJson(res, 200, {
         ok: true,
         running: Boolean(dutyRun),
+        finalizing: Boolean(dutyFinalizing),
         startedAt: dutyRun ? new Date(dutyRun.startedAt).toISOString() : null,
         elapsedSec: dutyRun ? Math.round((Date.now() - dutyRun.startedAt) / 1000) : 0,
         why: dutyRun ? dutyRun.why : null,
@@ -3164,24 +3217,25 @@ const pondAccount = async () => {
     if (req.method === 'GET' && path === '/api/bili-pond/pond') {
       const url = new URL(req.url, 'http://127.0.0.1')
       const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 60)))
-      const items = readHistory(stateDir).slice(0, limit)
+      const allItems = readHistory(stateDir) // 已按日期从新到旧排序
+      const items = allItems.slice(0, limit)
       const glog = readGuardLog(200)
       const answered = guardAnswered()
       const scans = glog.filter((e) => e.type === 'scan')
       const replies = glog.filter((e) => e.type === 'reply')
       const queue = new Map()
       for (const e of glog) if (e.type === 'queue' && e.rpid) queue.set(String(e.rpid), e)
-      const days = new Set(items.map((e) => e.date))
-      const picked = items.filter((e) => e.picked).length
+      const days = new Set(allItems.map((e) => e.date))
+      const picked = allItems.filter((e) => e.picked).length
       /* 经验 = 看过 +10 / 回过 +5 / 跑过一天 +20。⚠️ 这是"陪伴账本"，不代表鱼变强了 */
-      const xp = items.length * 10 + replies.length * 5 + days.size * 20
+      const xp = allItems.length * 10 + replies.length * 5 + days.size * 20
       const STEP = 200
       const kw = new Map()
-      for (const e of items) for (const k of (e.keywords && e.keywords.length ? e.keywords : ['未标'])) kw.set(k, (kw.get(k) || 0) + 1)
+      for (const e of allItems) for (const k of (e.keywords && e.keywords.length ? e.keywords : ['未标'])) kw.set(k, (kw.get(k) || 0) + 1)
       const week = [...Array(7)].map((_, i) => {
         const dt = new Date(Date.now() - (6 - i) * 86400000)
         const key = dayKey(dt)
-        return { date: key, n: items.filter((e) => e.date === key).length }
+        return { date: key, n: allItems.filter((e) => e.date === key).length }
       })
       const memoryFile = join(stateDir, 'memory.jsonl')
       let memory = []
@@ -3195,11 +3249,12 @@ const pondAccount = async () => {
       try { if (existsSync(join(stateDir, 'say.txt'))) say = readFileSync(join(stateDir, 'say.txt'), 'utf8').trim() } catch { say = '' }
       return sendJson(res, 200, {
         ok: true,
+        config: cfg,
         account: await pondAccount(),
         usage: readUsageToday(),
         stats: {
           xp, step: STEP, level: Math.max(1, Math.floor(xp / STEP) + 1), xpIn: xp % STEP,
-          days: days.size, items: items.length, picked, replies: replies.length,
+          days: days.size, items: allItems.length, picked, replies: replies.length,
           keywords: [...kw].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n), week,
         },
         daily: { date: dayKey(new Date()), count: answered.today.size, cap: Math.max(0, Math.min(500, Number(cfg.guardDailyCap) || 0)) },
@@ -3220,7 +3275,7 @@ const pondAccount = async () => {
     if (req.method === 'POST' && path === '/api/bili-pond/config') {
       const body = await readBody(req)
       const patch = {}
-      for (const k of ['perDay', 'peakValley', 'noon', 'night', 'autoComment', 'transcribe', 'asrModel',
+      for (const k of ['perDay', 'peakValley', 'noon', 'night', 'autoComment', 'circleMode', 'transcribe', 'asrModel',
         'commentPerRound', 'mentionName', 'mentionUid', 'dmOn', 'dmMode', 'dmUid',
         // 2026-10-20 自动运行 / 配额 / 时长 / 字幕优先 / 熔断
         'autoRun', 'autoRunsPerDay', 'autoGapMinutes', 'peakValleyOnly',

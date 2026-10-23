@@ -31,6 +31,7 @@ import { verifyRecent, appendVerifyToReport } from './lib/verify.mjs'
 import { WINDOWS, stateDirOf, readJson, writeJson, ensureHomeFiles, ensureCharter, charterPath, inWindow, dayKey } from './lib/state.mjs'
 import { loginStart, loginPoll, saveCredential, renderQrPng } from './lib/login.mjs'
 import { ensureUv } from './lib/uvfetch.mjs'
+import { harvestReport, appendHistory, enrich } from './lib/history.mjs'
 
 export const name = 'bili-pond'
 export const inject = ['webServer', 'tools', 'settings']
@@ -1494,6 +1495,30 @@ export function apply(ctx, config) {
     } catch (e) { log(`补占位报告失败：${e?.message ?? e}`) }
   }
 
+  /**
+   * ⭐ 历史记录（2026-10-23 用户要「看过哪些视频、带封面」）：
+   *   每轮跑完把**当天的日报**解析成结构化条目，追加进 `history.jsonl`（按 日期+BV 去重），
+   *   再顺手补几条封面/时长。
+   *   ⚠️ 三条规矩：
+   *     1. 只解析日报里**真有的**东西 —— 没写关键词就是没写，不猜、不补（数据要能对上原始报告）；
+   *     2. 全程 try/catch + 不阻塞：这是"记录"不是"功能"，记失败只该少一行，不该影响值班；
+   *     3. 补封面走网络 ⇒ 异步、限量（每轮最多 6 条），失败只留空，绝不让界面等人。
+   */
+  const recordRoundHistory = () => {
+    const f = join(outDir, `${dayKey()}.md`)
+    if (!existsSync(f)) return
+    // 先补封面再落盘（异步、限量、失败只留空）—— 免得 history.jsonl 里先存一条没图的、之后不再补
+    Promise.resolve()
+      .then(async () => {
+        const items = harvestReport(f)
+        if (!items.length) return
+        try { await enrich(stateDir, items, { limit: 6 }) } catch (e) { log(`补封面时出错（不影响这一轮）：${e?.message ?? e}`) }
+        const added = appendHistory(stateDir, items)
+        if (added) log(`历史记录：记下 ${added} 条（${dayKey()}）`)
+      })
+      .catch((e) => log(`记历史时出错（不影响这一轮）：${e?.message ?? e}`))
+  }
+
   /* ⭐ 本轮运行状态（2026-10-20）：设置页要能实时看到"跑到哪了"
    *   只记开始时间 + 触发原因；日志尾部从 duty.log 现读，不用把输出全攒在内存里。 */
   let dutyRun = null            // { startedAt: ms, why: 'manual' | 'auto' | … }
@@ -1597,6 +1622,7 @@ export function apply(ctx, config) {
       const tookSec = Math.round((Date.now() - startedMs) / 1000)
       dutyRun = null
       stubReportIfMissing(code)   // ⭐ 没写报告就补一份占位 —— 别让使用者什么都看不到
+      recordRoundHistory()        // ⭐ 把这一轮的日报解析进 history.jsonl（界面的「历史记录」靠它）
       /* ⭐ 守护：这一轮的待回复清单用完就删 —— 留着的话下一轮会把同一批再塞进提示词，
        *    模型就会重复回同一批人（seen 表只挡"再扫出来"，挡不住"清单还在"） */
       try { rmSync(guardQueueFile, { force: true }) } catch { /* 删不掉也不影响这一轮 */ }

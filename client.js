@@ -1927,14 +1927,14 @@ window.__ModuleLoader__.load({
       .pond-acts { display:flex; gap:8px; flex:none; }
       /* 按钮：不碰底色/字色（那是宿主的），只在悬停、按下、聚焦时加一圈发光 */
       .pond [data-bd-btn] { transition:box-shadow .16s ease; }
-      .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.20), 0 0 12px rgba(37,99,235,.26); }
-      .pond [data-bd-btn]:active { box-shadow:0 0 0 2px rgba(37,99,235,.36), 0 0 18px rgba(37,99,235,.42); }
+      .pond [data-bd-btn]:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40); }
+      .pond [data-bd-btn]:active { box-shadow:0 0 0 3px rgba(37,99,235,.50), 0 0 22px rgba(37,99,235,.55); }
       .pond [data-bd-btn]:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,.46), 0 0 16px rgba(37,99,235,.38); }
       .pond [data-bd-btn][disabled] { box-shadow:none; cursor:not-allowed; }
       /* 左下角入口：同样是原样 + 发光 */
       .pond-entry { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 8px; border:0; border-radius:6px;
         background:transparent; color:inherit; font-size:12px; cursor:pointer; transition:box-shadow .16s ease; }
-      .pond-entry:hover { box-shadow:0 0 0 2px rgba(37,99,235,.20), 0 0 12px rgba(37,99,235,.28); }
+      .pond-entry:hover { box-shadow:0 0 0 2px rgba(37,99,235,.34), 0 0 16px rgba(37,99,235,.40); }
       .pond-entry:active { box-shadow:0 0 0 2px rgba(37,99,235,.38), 0 0 18px rgba(37,99,235,.45); }
       .pond-strip { display:flex; gap:15px; align-items:center; font-size:12.5px; color:var(--dsw-alias-label-secondary); padding:9px 14px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
       .pond-strip b { color:var(--dsw-alias-label-primary); font-weight:600; }
@@ -2225,7 +2225,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.2',
+              ' · v1.3.3',
             ]),
           ]),
         ]),

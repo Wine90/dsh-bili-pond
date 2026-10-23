@@ -31,7 +31,7 @@ import { verifyRecent, appendVerifyToReport } from './lib/verify.mjs'
 import { WINDOWS, stateDirOf, readJson, writeJson, ensureHomeFiles, ensureCharter, charterPath, inWindow, dayKey } from './lib/state.mjs'
 import { loginStart, loginPoll, saveCredential, renderQrPng } from './lib/login.mjs'
 import { ensureUv } from './lib/uvfetch.mjs'
-import { harvestReport, appendHistory, enrich } from './lib/history.mjs'
+import { harvestReport, appendHistory, enrich, readHistory } from './lib/history.mjs'
 
 export const name = 'bili-pond'
 export const inject = ['webServer', 'tools', 'settings']
@@ -3084,6 +3084,54 @@ export function apply(ctx, config) {
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: String(e?.message ?? e) })
       }
+    }
+    /* ⭐ 大肥鱼整页：一次拿全（统计 + 历史 + 记忆 + 日记 + 守护记录），客户端只发一个请求 */
+    if (req.method === 'GET' && path === '/api/bili-pond/pond') {
+      const url = new URL(req.url, 'http://127.0.0.1')
+      const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 60)))
+      const items = readHistory(stateDir).slice(0, limit)
+      const glog = readGuardLog(200)
+      const answered = guardAnswered()
+      const scans = glog.filter((e) => e.type === 'scan')
+      const replies = glog.filter((e) => e.type === 'reply')
+      const queue = new Map()
+      for (const e of glog) if (e.type === 'queue' && e.rpid) queue.set(String(e.rpid), e)
+      const days = new Set(items.map((e) => e.date))
+      const picked = items.filter((e) => e.picked).length
+      /* 经验 = 看过 +10 / 回过 +5 / 跑过一天 +20。⚠️ 这是"陪伴账本"，不代表鱼变强了 */
+      const xp = items.length * 10 + replies.length * 5 + days.size * 20
+      const STEP = 200
+      const kw = new Map()
+      for (const e of items) for (const k of (e.keywords && e.keywords.length ? e.keywords : ['未标'])) kw.set(k, (kw.get(k) || 0) + 1)
+      const week = [...Array(7)].map((_, i) => {
+        const dt = new Date(Date.now() - (6 - i) * 86400000)
+        const key = dayKey(dt)
+        return { date: key, n: items.filter((e) => e.date === key).length }
+      })
+      const memoryFile = join(stateDir, 'memory.jsonl')
+      let memory = []
+      try {
+        if (existsSync(memoryFile)) memory = readFileSync(memoryFile, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean).slice(-100)
+      } catch { memory = [] }
+      const diaryFile = join(stateDir, 'diary', dayKey(new Date()) + '.md')
+      let diary = ''
+      try { if (existsSync(diaryFile)) diary = readFileSync(diaryFile, 'utf8') } catch { diary = '' }
+      return sendJson(res, 200, {
+        ok: true,
+        stats: {
+          xp, step: STEP, level: Math.max(1, Math.floor(xp / STEP) + 1), xpIn: xp % STEP,
+          days: days.size, items: items.length, picked, replies: replies.length,
+          keywords: [...kw].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n), week,
+        },
+        daily: { date: dayKey(new Date()), count: answered.today.size, cap: Math.max(0, Math.min(500, Number(cfg.guardDailyCap) || 0)) },
+        items, memory,
+        diary: { date: dayKey(new Date()), text: diary },
+        scans: scans.slice(-20).reverse().map((e) => ({ ts: e.ts, comments: (e.scanned && e.scanned.comments) || 0, queued: e.queued || 0 })),
+        replies: replies.slice(-40).reverse().map((r) => {
+          const q = queue.get(String(r.rpid)) || {}
+          return { ts: r.ts, bvid: r.bvid, ok: r.ok, uname: q.uname || '', quote: q.text || '', text: r.text || '' }
+        }),
+      })
     }
     if (req.method === 'GET' && path === '/api/bili-pond/config') {
       return sendJson(res, 200, { ok: true, config: cfg, windows: WINDOWS, home: stateDir })

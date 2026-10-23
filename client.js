@@ -1905,7 +1905,9 @@ window.__ModuleLoader__.load({
     let openPond = () => {}
 
     const POND_CSS = `
-      .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; height:100%; min-height:0; box-sizing:border-box; overflow-y:auto; overflow-x:hidden; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
+      .pond { display:flex; flex-direction:column; gap:12px; padding:16px 20px 26px; max-height:calc(100vh - 120px); box-sizing:border-box; overflow-y:auto; overflow-x:hidden; background:var(--dsw-alias-bg-base); color:var(--dsw-alias-label-primary); }
+        /* 嵌进鱼塘页的设置页：外层 .pond 已经在滚，内层不再自己滚、不再另设高度（避免双层滚动条 + 被裁） */
+        .pond [data-bd-page]{ max-height:none; overflow:visible; padding-right:0; }
       .pond {
         --bd-accent:#2563eb; --bd-accent-2:#1d4ed8;
         --bd-fg:var(--dsw-alias-label-primary); --bd-fg-2:var(--dsw-alias-label-secondary); --bd-fg-3:var(--dsw-alias-label-secondary);
@@ -2244,7 +2246,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.7',
+              ' · v1.3.8',
             ]),
           ]),
         ]),

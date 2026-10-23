@@ -1910,6 +1910,20 @@ window.__ModuleLoader__.load({
            自动最小高度归零，被压到 509px，设置内容 1600+px 被静默裁掉（没有滚动条）。
            修法：.pond 的直接子卡片不裁剪、不压缩（flex:0 0 auto），内容撑开 .pond 由它统一滚动。 */
         .pond > .pond-card { overflow:visible; flex:0 0 auto; }
+        /* ⭐ 1.3.10 大页面设置区重排：宽屏两栏。分栏规则：
+           · 横跨整行（grid-column:1/-1）：指标栏 / 本轮进度 / 工具栏 / 各类提示条 / 今日报告 / 页脚 —— 顶部信息要完整宽度
+           · 卡片（[data-bd-card]）：默认单列宽，自动流填两栏（左高右矮自然错落），grid 不会压缩也不会裁剪
+           · Divider 在 grid 里没意义了 ⇒ display:none（栏间已有 16px 间距）
+           · 窄屏（<1100px）回退单列 */
+        .pond-settings [data-bd-page] { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; max-width:none; }
+        .pond-settings [data-bd-page] > [data-bd-metrics],
+        .pond-settings [data-bd-page] > [data-bd-toolbar],
+        .pond-settings [data-bd-page] > [data-bd-guide],
+        .pond-settings [data-bd-page] > [data-bd-msg],
+        .pond-settings [data-bd-page] > [data-bd-foot],
+        .pond-settings [data-bd-page] > [data-bd-card] { grid-column:1 / -1; }
+        .pond-settings [data-bd-page] > [data-bd-divider] { display:none; }
+        @media (max-width:1100px) { .pond-settings [data-bd-page] { grid-template-columns:1fr; } }
         /* 嵌进鱼塘页的设置页：外层 .pond 已经在滚，内层不再自己滚、不再另设高度（避免双层滚动条 + 被裁） */
         .pond [data-bd-page]{ max-height:none; overflow:visible; padding-right:0; }
       .pond {
@@ -2159,7 +2173,7 @@ window.__ModuleLoader__.load({
       }
 
       const diaryText = (d.diary && d.diary.text) || ''
-      const settingsTab = h('div', { className: 'pond-card' }, h(Panel))
+      const settingsTab = h('div', { className: 'pond-card pond-settings' }, h(Panel))
 
       const historyTab = h('div', { className: 'pond-cols' }, [
         h('div', { key: 'l', style: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 } }, [
@@ -2250,7 +2264,7 @@ window.__ModuleLoader__.load({
               h('a', { key: 'up', href: 'https://space.bilibili.com/14430149', target: '_blank', rel: 'noreferrer', title: '去 B站 看 变量探索SEQVEC' }, '变量探索SEQVEC'),
               ' · ',
               h('a', { key: 'gh', href: 'https://github.com/YOYOLnFu/dsh-bili-pond', target: '_blank', rel: 'noreferrer' }, 'GitHub'),
-              ' · v1.3.9',
+              ' · v1.3.10',
             ]),
           ]),
         ]),
